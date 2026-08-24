@@ -273,6 +273,8 @@ export default function App() {
   };
 
   const [venteEnEdition, setVenteEnEdition] = useState(null);
+  const [rapportPeriode, setRapportPeriode] = useState("jour");
+  const [rapportDate, setRapportDate] = useState(today);
   const modifierVente = (id, nouveauMontantPaye, nouveauMode) => {
     const v = ventes.find(x => x.id === id);
     if (!v) return;
@@ -825,9 +827,6 @@ export default function App() {
       </Card>
     </div>
   );
-
-  const [rapportPeriode, setRapportPeriode] = useState("jour");
-  const [rapportDate, setRapportDate] = useState(today);
 
   const renderRapports = () => {
     const parProduit = {};
