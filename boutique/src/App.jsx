@@ -3,11 +3,11 @@ import { supabase } from "./supabaseClient";
 import {
   Home, Package, ShoppingCart, Users, Wallet, BarChart3, Settings, Lock,
   Plus, Trash2, Pencil, Check, X, Printer, Download, Search, Menu as MenuIcon,
-  AlertTriangle, GraduationCap, ClipboardList, Truck,
+  AlertTriangle, GraduationCap, ClipboardList, Truck, Layers,
 } from "lucide-react";
 
 const C = {
-  ink: "#1f2937", inkDeep: "#111827", paper: "#f7f5f0", brass: "#b8873b", brassSoft: "#f3e6cf",
+  ink: "#1f2937", inkDeep: "#111827", paper: "#f7f5f0", brass: "#e0720f", brassSoft: "#fce4cc",
   sage: "#4d7c5f", sageSoft: "#e2ede4", rose: "#b3452f", roseSoft: "#f6e3de", text: "#28241d",
   textSoft: "#7a7266", line: "#e6e0d4",
 };
@@ -86,6 +86,8 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("saved");
   const [retrySaveTick, setRetrySaveTick] = useState(0);
   const [menu, setMenu] = useState("accueil");
+  const [dashboardAuthed, setDashboardAuthed] = useState(false);
+  const [dashboardPwd, setDashboardPwd] = useState(""); const [dashboardErr, setDashboardErr] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [produits, setProduits] = useState(initProduits());
@@ -169,6 +171,8 @@ export default function App() {
   };
   const deleteProduit = (id) => {
     if (ventes.some(v => v.items.some(it => it.produitId === id))) { window.alert("Impossible de supprimer : ce produit a déjà été vendu au moins une fois. Ses ventes passées doivent rester lisibles."); return; }
+    if (arrivages.some(a => a.produitId === id)) { window.alert("Impossible de supprimer : ce produit a déjà des arrivages enregistrés. Son historique doit rester lisible."); return; }
+    if (commandes.some(c => c.produitId === id)) { window.alert("Impossible de supprimer : ce produit a déjà des commandes fournisseurs liées."); return; }
     if (window.confirm("Supprimer ce produit ?")) setProduits(prev => prev.filter(p => p.id !== id));
   };
   const enregistrerArrivage = (produitId, quantite, date, fournisseur) => {
@@ -203,6 +207,7 @@ export default function App() {
   };
   const deleteClient = (id) => {
     if (clientSolde(id) > 0) { window.alert("Impossible de supprimer : ce client a encore un solde dû."); return; }
+    if (ventes.some(v => v.clientId === id)) { window.alert("Impossible de supprimer : ce client a déjà un historique d'achats. Ses ventes passées doivent rester lisibles."); return; }
     if (window.confirm("Supprimer ce client ?")) setClients(prev => prev.filter(c => c.id !== id));
   };
 
@@ -267,6 +272,24 @@ export default function App() {
     setRemboursementForm({ clientId: "", montant: "", mode: "Espèces" });
   };
 
+  const [venteEnEdition, setVenteEnEdition] = useState(null);
+  const modifierVente = (id, nouveauMontantPaye, nouveauMode) => {
+    const v = ventes.find(x => x.id === id);
+    if (!v) return;
+    const montant = Number(nouveauMontantPaye);
+    if (montant > v.total) { window.alert("Le montant payé ne peut pas dépasser le total de la vente."); return; }
+    setVentes(prev => prev.map(x => x.id === id ? { ...x, montantPaye: montant, mode: nouveauMode } : x));
+    setVenteEnEdition(null);
+  };
+  const supprimerVente = (id) => {
+    const v = ventes.find(x => x.id === id);
+    if (!v) return;
+    if (!window.confirm("Supprimer définitivement cette vente ? Le stock des produits concernés sera restitué.")) return;
+    setProduits(prev => prev.map(p => { const item = v.items.find(it => it.produitId === p.id); return item ? { ...p, stock: p.stock + item.quantite } : p; }));
+    setVentes(prev => prev.filter(x => x.id !== id));
+    if (derniereVenteId === id) setDerniereVenteId(null);
+  };
+
   /* ================= LOGIN ================= */
   const handleLogin = async () => {
     setPwdErr(false);
@@ -313,19 +336,38 @@ export default function App() {
 
   /* ================= MENUS ================= */
   const renderAccueil = () => {
+    if (!dashboardAuthed) return (
+      <Card style={{ width: 320, margin: "40px auto", textAlign: "center" }}>
+        <Lock size={22} color={C.brass} style={{ marginBottom: 8 }} />
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Tableau de bord protégé</div>
+        <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10 }}>Les informations financières de la boutique sont réservées.</div>
+        <Input type="password" placeholder="Mot de passe" value={dashboardPwd} onChange={e => { setDashboardPwd(e.target.value); setDashboardErr(false); }}
+          onKeyDown={e => e.key === "Enter" && (dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true))}
+          style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+        {dashboardErr && <div style={{ color: C.rose, fontSize: 12, marginBottom: 8 }}>Mot de passe incorrect.</div>}
+        <Btn style={{ width: "100%", justifyContent: "center" }} onClick={() => dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true)}>Déverrouiller</Btn>
+      </Card>
+    );
+
     const produitsAlerte = produits.filter(p => p.stock <= p.seuilAlerte);
     const ventesAujourdhui = ventes.filter(v => v.date === today);
     const caJour = ventesAujourdhui.reduce((s, v) => s + v.total, 0);
     const totalDu = clients.reduce((s, c) => s + Math.max(clientSolde(c.id), 0), 0);
     return (
       <div>
-        <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Tableau de bord</div>
-        <div style={{ color: C.textSoft, fontSize: 13, marginBottom: 16 }}>{config.nomBoutique}</div>
+        <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Tableau de bord</div>
+            <div style={{ color: C.textSoft, fontSize: 13, marginBottom: 16 }}>{config.nomBoutique}</div>
+          </div>
+          <Btn kind="ghost" onClick={() => setDashboardAuthed(false)}><Lock size={13} /> Verrouiller</Btn>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.sage, fontWeight: 600 }}>{fmt(caJour, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>ventes aujourd'hui</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.ink, fontWeight: 600 }}>{produits.length}</div><div style={{ fontSize: 11, color: C.textSoft }}>produits en catalogue</div></Card>
+          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.ink, fontWeight: 600 }}>{fmt(totalVentes, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>chiffre d'affaires total</div></Card>
+          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.brass, fontWeight: 600 }}>{fmt(totalEncaisse, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>montant total encaissé</div></Card>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.rose, fontWeight: 600 }}>{produitsAlerte.length}</div><div style={{ fontSize: 11, color: C.textSoft }}>produits en alerte stock</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.brass, fontWeight: 600 }}>{fmt(totalDu, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>total dû par les clients</div></Card>
+          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.rose, fontWeight: 600 }}>{fmt(totalDu, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>total dû par les clients</div></Card>
         </div>
         {produitsAlerte.length > 0 && (
           <Card>
@@ -474,6 +516,57 @@ export default function App() {
     </div>
   );
 
+  const renderStock = () => {
+    const mouvementsCombines = [
+      ...arrivages.map(a => ({ date: a.date, produitId: a.produitId, type: "Entrée", quantite: a.quantite, detail: a.fournisseur || "Arrivage" })),
+      ...ventes.flatMap(v => v.items.map(it => ({ date: v.date, produitId: it.produitId, type: "Sortie", quantite: it.quantite, detail: "Vente" }))),
+    ].sort((a, b) => b.date.localeCompare(a.date));
+
+    return (
+      <div>
+        <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Stock en temps réel</div>
+        <Card style={{ padding: 0 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><Th>Produit</Th><Th>Catégorie</Th><Th>Stock actuel</Th><Th>Statut</Th></tr></thead>
+            <tbody>
+              {produits.map(p => {
+                const enAlerte = p.stock <= p.seuilAlerte;
+                return (
+                  <tr key={p.id}>
+                    <Td style={{ fontWeight: 600 }}>{p.nom}</Td>
+                    <Td>{p.categorie}</Td>
+                    <Td className="f-mono" style={{ fontWeight: 700 }}>{p.stock} {p.unite}(s)</Td>
+                    <Td><Pill_ text={enAlerte ? "Stock faible" : "Correct"} color={enAlerte ? C.rose : C.sage} bg={enAlerte ? C.roseSoft : C.sageSoft} /></Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Mouvements (entrées et sorties)</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><Th>Date</Th><Th>Produit</Th><Th>Type</Th><Th>Quantité</Th><Th>Détail</Th></tr></thead>
+            <tbody>
+              {mouvementsCombines.slice(0, 60).map((m, i) => (
+                <tr key={i}>
+                  <Td>{m.date}</Td>
+                  <Td style={{ fontWeight: 600 }}>{produits.find(p => p.id === m.produitId)?.nom || "—"}</Td>
+                  <Td><Pill_ text={m.type} color={m.type === "Entrée" ? C.sage : C.rose} bg={m.type === "Entrée" ? C.sageSoft : C.roseSoft} /></Td>
+                  <Td className="f-mono">{m.type === "Entrée" ? "+" : "−"}{m.quantite}</Td>
+                  <Td style={{ fontSize: 11.5, color: C.textSoft }}>{m.detail}</Td>
+                </tr>
+              ))}
+              {!mouvementsCombines.length && <tr><Td colSpan={5} style={{ textAlign: "center", color: C.textSoft }}>Aucun mouvement encore.</Td></tr>}
+            </tbody>
+          </table>
+          {mouvementsCombines.length > 60 && <div style={{ fontSize: 11, color: C.textSoft, marginTop: 6 }}>Affichage des 60 mouvements les plus récents.</div>}
+        </Card>
+      </div>
+    );
+  };
+
   const renderVente = () => {
     const recu = derniereVenteId ? ventes.find(v => v.id === derniereVenteId) : null;
     const produitsFiltres = produits.filter(p => !rechercheProduit || p.nom.toLowerCase().includes(rechercheProduit.toLowerCase())).filter(p => p.stock > 0);
@@ -587,7 +680,7 @@ export default function App() {
         <Card className="no-print">
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Historique des ventes</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><Th>Date</Th><Th>Client</Th><Th>Total</Th><Th>Payé</Th><Th>Actions</Th></tr></thead>
+            <thead><tr><Th>Date</Th><Th>Client</Th><Th>Total</Th><Th>Payé</Th><Th>Mode</Th><Th>Actions</Th></tr></thead>
             <tbody>
               {[...ventes].reverse().map(v => {
                 const client = clients.find(c => c.id === v.clientId);
@@ -596,12 +689,38 @@ export default function App() {
                     <Td>{v.date}</Td>
                     <Td>{client ? client.nom : "Comptant"}</Td>
                     <Td className="f-mono">{fmt(v.total, config.devise)}</Td>
-                    <Td className="f-mono" style={{ color: v.montantPaye < v.total ? C.rose : C.sage }}>{fmt(v.montantPaye, config.devise)}</Td>
-                    <Td><Btn kind="ghost" onClick={() => setDerniereVenteId(v.id)}><Printer size={12} /> Reçu</Btn></Td>
+                    {venteEnEdition === v.id ? (
+                      <>
+                        <Td><Input type="number" defaultValue={v.montantPaye} id={`edit-paye-${v.id}`} style={{ width: 90 }} /></Td>
+                        <Td>
+                          <Select defaultValue={v.mode} id={`edit-mode-${v.id}`}>
+                            <option>Espèces</option><option>Orange Money</option><option>Mobile Money (autre)</option><option>Virement</option>
+                          </Select>
+                        </Td>
+                        <Td>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <Btn kind="ghost" onClick={() => modifierVente(v.id, document.getElementById(`edit-paye-${v.id}`).value, document.getElementById(`edit-mode-${v.id}`).value)}><Check size={12} /></Btn>
+                            <Btn kind="ghost" onClick={() => setVenteEnEdition(null)}><X size={12} /></Btn>
+                          </div>
+                        </Td>
+                      </>
+                    ) : (
+                      <>
+                        <Td className="f-mono" style={{ color: v.montantPaye < v.total ? C.rose : C.sage }}>{fmt(v.montantPaye, config.devise)}</Td>
+                        <Td style={{ fontSize: 11.5 }}>{v.mode}</Td>
+                        <Td>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <Btn kind="ghost" onClick={() => setDerniereVenteId(v.id)}><Printer size={12} /></Btn>
+                            <button onClick={() => setVenteEnEdition(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Pencil size={14} color={C.textSoft} /></button>
+                            <button onClick={() => supprimerVente(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={14} color={C.rose} /></button>
+                          </div>
+                        </Td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
-              {!ventes.length && <tr><Td colSpan={5} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
+              {!ventes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
             </tbody>
           </table>
         </Card>
@@ -613,7 +732,10 @@ export default function App() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Clients</div>
-        <Btn onClick={() => setClientForm({ nom: "", telephone: "", adresse: "", quartier: "", profession: "" })}><Plus size={13} /> Ajouter</Btn>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn kind="ghost" onClick={() => exportCSV("clients.csv", ["Nom", "Téléphone", "Quartier", "Profession", "Total acheté", "Solde dû"], clients.map(c => [c.nom, c.telephone, c.quartier || "", c.profession || "", clientTotalAchats(c.id), Math.max(clientSolde(c.id), 0)]))}><Download size={13} /> Exporter</Btn>
+          <Btn onClick={() => setClientForm({ nom: "", telephone: "", adresse: "", quartier: "", profession: "" })}><Plus size={13} /> Ajouter</Btn>
+        </div>
       </div>
 
       {clientForm && (
@@ -704,20 +826,99 @@ export default function App() {
     </div>
   );
 
+  const [rapportPeriode, setRapportPeriode] = useState("jour");
+  const [rapportDate, setRapportDate] = useState(today);
+
   const renderRapports = () => {
     const parProduit = {};
     ventes.forEach(v => v.items.forEach(it => { parProduit[it.produitId] = (parProduit[it.produitId] || 0) + it.quantite; }));
     const meilleuresVentes = Object.entries(parProduit).map(([id, q]) => ({ produit: produits.find(p => p.id === id), quantite: q })).filter(x => x.produit).sort((a, b) => b.quantite - a.quantite).slice(0, 10);
+
+    const ref = new Date(rapportDate + "T00:00:00");
+    let debut, fin, labelPeriode;
+    if (rapportPeriode === "jour") { debut = fin = rapportDate; labelPeriode = `Rapport journalier — ${rapportDate}`; }
+    else if (rapportPeriode === "semaine") {
+      const jourSemaine = ref.getDay();
+      const diffLundi = jourSemaine === 0 ? -6 : 1 - jourSemaine;
+      const lundi = new Date(ref); lundi.setDate(ref.getDate() + diffLundi);
+      const dimanche = new Date(lundi); dimanche.setDate(lundi.getDate() + 6);
+      debut = lundi.toISOString().slice(0, 10); fin = dimanche.toISOString().slice(0, 10);
+      labelPeriode = `Rapport hebdomadaire — du ${debut} au ${fin}`;
+    } else {
+      const premier = new Date(ref.getFullYear(), ref.getMonth(), 1);
+      const dernier = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
+      debut = premier.toISOString().slice(0, 10); fin = dernier.toISOString().slice(0, 10);
+      labelPeriode = `Rapport mensuel — ${ref.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}`;
+    }
+    const ventesP = ventes.filter(v => v.date >= debut && v.date <= fin);
+    const depensesP = depenses.filter(d => d.date >= debut && d.date <= fin);
+    const paiementsCreditP = paiementsCredit.filter(p => p.date >= debut && p.date <= fin);
+    const totalVentesP = ventesP.reduce((s, v) => s + v.total, 0);
+    const totalEncaisseP = ventesP.reduce((s, v) => s + Number(v.montantPaye || 0), 0) + paiementsCreditP.reduce((s, p) => s + Number(p.montant), 0);
+    const totalDepensesP = depensesP.reduce((s, d) => s + Number(d.montant), 0);
+    const coutMarchandisesP = ventesP.reduce((s, v) => s + v.items.reduce((s2, it) => { const p = produits.find(x => x.id === it.produitId); return s2 + (p ? p.prixAchat * it.quantite : 0); }, 0), 0);
+    const beneficeP = totalVentesP - coutMarchandisesP;
+    const montantEnCaisseP = totalEncaisseP - totalDepensesP;
+
     return (
       <div>
         <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Rapports</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
+
+        <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <Select value={rapportPeriode} onChange={e => setRapportPeriode(e.target.value)}>
+            <option value="jour">Journalier</option><option value="semaine">Hebdomadaire</option><option value="mois">Mensuel</option>
+          </Select>
+          <Input type="date" value={rapportDate} onChange={e => setRapportDate(e.target.value)} />
+          <Btn kind="ghost" onClick={() => window.print()}><Printer size={13} /> Imprimer ce rapport</Btn>
+        </div>
+
+        <Card className="print-area">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <div style={{ width: 46, height: 46, borderRadius: "50%", border: `2px solid ${C.brass}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                {config.logo ? <img src={config.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ShoppingCart size={20} color={C.brass} />}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{config.nomBoutique}</div>
+                {config.adresse && <div style={{ fontSize: 10.5, color: C.textSoft }}>{config.adresse}</div>}
+                {config.tels && <div style={{ fontSize: 10.5, color: C.textSoft }}>Tél : {config.tels}</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className="f-display" style={{ textAlign: "center", fontWeight: 700, fontSize: 19, margin: "16px 0 20px", textTransform: "uppercase" }}>{labelPeriode}</div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, border: `1px solid ${C.ink}` }}>
+            <tbody>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Montant total des ventes</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, border: `1px solid ${C.line}` }}>{fmt(totalVentesP, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Montant total des dépenses</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: C.rose, border: `1px solid ${C.line}` }}>{fmt(totalDepensesP, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Bénéfice (intérêt)</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: C.brass, border: `1px solid ${C.line}` }}>{fmt(beneficeP, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Montant en caisse</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: C.sage, border: `1px solid ${C.line}` }}>{fmt(montantEnCaisseP, config.devise)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ fontSize: 10.5, color: C.textSoft, marginTop: 8 }}>{ventesP.length} vente(s) · {depensesP.length} dépense(s) enregistrée(s) sur cette période.</div>
+        </Card>
+
+        <div className="f-display no-print" style={{ fontSize: 15, fontWeight: 600, margin: "20px 0 10px" }}>Statistiques globales (depuis le début)</div>
+        <div className="no-print" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 18, fontWeight: 700 }}>{fmt(totalVentes, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>chiffre d'affaires total</div></Card>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 18, fontWeight: 700, color: C.sage }}>{fmt(totalEncaisse, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>total réellement encaissé</div></Card>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 18, fontWeight: 700, color: C.rose }}>{fmt(totalDepenses, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>total dépenses</div></Card>
           <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 18, fontWeight: 700, color: C.brass }}>{fmt(beneficeBrut - totalDepenses, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>bénéfice net estimé</div></Card>
         </div>
-        <Card>
+        <Card className="no-print">
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Meilleures ventes</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><Th>Produit</Th><Th>Quantité vendue</Th></tr></thead>
@@ -769,6 +970,11 @@ export default function App() {
           <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 4 }}>Logo</div>
           <input type="file" accept="image/*" onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => setConfig({ ...config, logo: r.result }); r.readAsDataURL(f); }} />
         </div>
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Mot de passe du tableau de bord</div>
+          <Input type="password" value={config.dashboardPassword || "Boutique2026"} onChange={e => setConfig({ ...config, dashboardPassword: e.target.value })} style={{ width: "100%", boxSizing: "border-box" }} />
+          <div style={{ fontSize: 11, color: C.textSoft, marginTop: 4 }}>Communiquez-le uniquement aux personnes de confiance.</div>
+        </div>
       </Card>
     </div>
   );
@@ -777,13 +983,14 @@ export default function App() {
     { k: "accueil", label: "Accueil", icon: Home },
     { k: "vente", label: "Vente / Caisse", icon: ShoppingCart },
     { k: "produits", label: "Produits", icon: Package },
+    { k: "stock", label: "Stock", icon: Layers },
     { k: "commandes", label: "Commandes", icon: ClipboardList },
     { k: "clients", label: "Clients", icon: Users },
     { k: "depenses", label: "Dépenses", icon: Wallet },
     { k: "rapports", label: "Rapports", icon: BarChart3 },
     { k: "parametres", label: "Paramètres", icon: Settings },
   ];
-  const pages = { accueil: renderAccueil, vente: renderVente, produits: renderProduits, commandes: renderCommandes, clients: renderClients, depenses: renderDepenses, rapports: renderRapports, parametres: renderParametres };
+  const pages = { accueil: renderAccueil, vente: renderVente, produits: renderProduits, stock: renderStock, commandes: renderCommandes, clients: renderClients, depenses: renderDepenses, rapports: renderRapports, parametres: renderParametres };
 
   return (
     <div className="f-body" style={{ minHeight: "100vh", background: C.paper, display: "flex" }}>
