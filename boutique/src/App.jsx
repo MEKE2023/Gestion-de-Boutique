@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient";
 import {
   Home, Package, ShoppingCart, Users, Wallet, BarChart3, Settings, Lock,
   Plus, Trash2, Pencil, Check, X, Printer, Download, Search, Menu as MenuIcon,
-  AlertTriangle, GraduationCap, ClipboardList, Truck, Layers,
+  AlertTriangle, GraduationCap, ClipboardList, Truck, Layers, LogOut,
 } from "lucide-react";
 
 const C = {
@@ -68,12 +68,12 @@ function exportCSV(filename, headers, rows) {
 }
 
 const initProduits = () => ([
-  { id: "pr1", nom: "Riz (sac 25kg)", categorie: "Alimentation", prixAchat: 180000, prixVente: 220000, stock: 12, seuilAlerte: 3, unite: "sac" },
-  { id: "pr2", nom: "Huile 1L", categorie: "Alimentation", prixAchat: 12000, prixVente: 15000, stock: 30, seuilAlerte: 8, unite: "bouteille" },
-  { id: "pr3", nom: "Savon Marseille", categorie: "Hygiène", prixAchat: 3000, prixVente: 4000, stock: 50, seuilAlerte: 10, unite: "pièce" },
+  { id: "pr1", nom: "Riz (sac 25kg)", categorie: "Alimentation", prixAchat: 180000, prixVente: 220000, stock: 12, seuilAlerte: 3, unite: "sac", dateAjout: today },
+  { id: "pr2", nom: "Huile 1L", categorie: "Alimentation", prixAchat: 12000, prixVente: 15000, stock: 30, seuilAlerte: 8, unite: "bouteille", dateAjout: today },
+  { id: "pr3", nom: "Savon Marseille", categorie: "Hygiène", prixAchat: 3000, prixVente: 4000, stock: 50, seuilAlerte: 10, unite: "pièce", dateAjout: today },
 ]);
 const initClients = () => ([
-  { id: "cl1", nom: "Mamadou Diallo", telephone: "622 00 00 00", adresse: "", quartier: "", profession: "" },
+  { id: "cl1", prenoms: "Mamadou", nom: "Diallo", sexe: "M", telephone: "622 00 00 00", quartier: "", profession: "" },
 ]);
 
 export default function App() {
@@ -172,7 +172,7 @@ export default function App() {
   const deleteProduit = (id) => {
     if (ventes.some(v => v.items.some(it => it.produitId === id))) { window.alert("Impossible de supprimer : ce produit a déjà été vendu au moins une fois. Ses ventes passées doivent rester lisibles."); return; }
     if (arrivages.some(a => a.produitId === id)) { window.alert("Impossible de supprimer : ce produit a déjà des arrivages enregistrés. Son historique doit rester lisible."); return; }
-    if (commandes.some(c => c.produitId === id)) { window.alert("Impossible de supprimer : ce produit a déjà des commandes fournisseurs liées."); return; }
+    if (commandes.some(c => c.items.some(it => it.produitId === id))) { window.alert("Impossible de supprimer : ce produit a déjà des commandes fournisseurs liées."); return; }
     if (window.confirm("Supprimer ce produit ?")) setProduits(prev => prev.filter(p => p.id !== id));
   };
   const enregistrerArrivage = (produitId, quantite, date, fournisseur) => {
@@ -183,16 +183,37 @@ export default function App() {
   };
   const [arrivageForm, setArrivageForm] = useState(null);
 
-  const [commandeForm, setCommandeForm] = useState(null);
-  const creerCommande = () => {
-    if (!commandeForm.produitId || !commandeForm.quantite) return;
-    setCommandes(prev => [...prev, { id: uid("co"), ...commandeForm, quantite: Number(commandeForm.quantite), dateCommande: today, statut: "En attente" }]);
-    setCommandeForm(null);
+  const [panierCommande, setPanierCommande] = useState([]);
+  const [commandeFournisseur, setCommandeFournisseur] = useState("");
+  const [derniereCommandeId, setDerniereCommandeId] = useState(null);
+  const ajouterAuPanierCommande = (produitId) => {
+    setPanierCommande(prev => {
+      const existe = prev.find(x => x.produitId === produitId);
+      if (existe) return prev.map(x => x.produitId === produitId ? { ...x, quantite: x.quantite + 1 } : x);
+      return [...prev, { produitId, quantite: 1 }];
+    });
+  };
+  const changerQuantitePanierCommande = (produitId, quantite) => {
+    const q = Number(quantite);
+    setPanierCommande(prev => q <= 0 ? prev.filter(x => x.produitId !== produitId) : prev.map(x => x.produitId === produitId ? { ...x, quantite: q } : x));
+  };
+  const retirerDuPanierCommande = (produitId) => setPanierCommande(prev => prev.filter(x => x.produitId !== produitId));
+  const totalPanierCommande = panierCommande.reduce((s, x) => { const p = produits.find(pr => pr.id === x.produitId); return s + (p ? p.prixAchat * x.quantite : 0); }, 0);
+
+  const validerCommande = () => {
+    if (!panierCommande.length) return;
+    const id = uid("co");
+    setCommandes(prev => [...prev, {
+      id, dateCommande: today, fournisseur: commandeFournisseur,
+      items: panierCommande.map(x => { const p = produits.find(pr => pr.id === x.produitId); return { produitId: x.produitId, nom: p.nom, prixAchat: p.prixAchat, quantite: x.quantite }; }),
+      total: totalPanierCommande, statut: "En attente",
+    }]);
+    setPanierCommande([]); setCommandeFournisseur(""); setDerniereCommandeId(id);
   };
   const receptionnerCommande = (id) => {
     const c = commandes.find(x => x.id === id);
     if (!c) return;
-    enregistrerArrivage(c.produitId, c.quantite, today, c.fournisseur);
+    c.items.forEach(it => enregistrerArrivage(it.produitId, it.quantite, today, c.fournisseur));
     setCommandes(prev => prev.map(x => x.id === id ? { ...x, statut: "Reçue", dateReception: today } : x));
   };
   const supprimerCommande = (id) => { if (window.confirm("Annuler cette commande ?")) setCommandes(prev => prev.filter(c => c.id !== id)); };
@@ -200,7 +221,7 @@ export default function App() {
   /* ---------- Clients ---------- */
   const [clientForm, setClientForm] = useState(null);
   const saveClient = () => {
-    if (!clientForm.nom) return;
+    if (!clientForm.prenoms || !clientForm.nom) return;
     if (clientForm.id) setClients(prev => prev.map(c => c.id === clientForm.id ? clientForm : c));
     else setClients(prev => [...prev, { ...clientForm, id: uid("cl") }]);
     setClientForm(null);
@@ -273,6 +294,7 @@ export default function App() {
   };
 
   const [venteEnEdition, setVenteEnEdition] = useState(null);
+  const [comptaTab, setComptaTab] = useState("historique");
   const [rapportPeriode, setRapportPeriode] = useState("jour");
   const [rapportDate, setRapportDate] = useState(today);
   const modifierVente = (id, nouveauMontantPaye, nouveauMode) => {
@@ -337,62 +359,150 @@ export default function App() {
   if (!dataLoaded) return <div className="f-body" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>{FONTS}Chargement des données…</div>;
 
   /* ================= MENUS ================= */
-  const renderAccueil = () => {
-    if (!dashboardAuthed) return (
-      <Card style={{ width: 320, margin: "40px auto", textAlign: "center" }}>
-        <Lock size={22} color={C.brass} style={{ marginBottom: 8 }} />
-        <div style={{ fontWeight: 700, marginBottom: 4 }}>Tableau de bord protégé</div>
-        <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10 }}>Les informations financières de la boutique sont réservées.</div>
-        <Input type="password" placeholder="Mot de passe" value={dashboardPwd} onChange={e => { setDashboardPwd(e.target.value); setDashboardErr(false); }}
-          onKeyDown={e => e.key === "Enter" && (dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true))}
-          style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
-        {dashboardErr && <div style={{ color: C.rose, fontSize: 12, marginBottom: 8 }}>Mot de passe incorrect.</div>}
-        <Btn style={{ width: "100%", justifyContent: "center" }} onClick={() => dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true)}>Déverrouiller</Btn>
-      </Card>
-    );
+  const renderAccueil = () => (
+    <div>
+      <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Tableau de bord</div>
+      <div style={{ color: C.textSoft, fontSize: 13 }}>{config.nomBoutique}</div>
+    </div>
+  );
 
-    const produitsAlerte = produits.filter(p => p.stock <= p.seuilAlerte);
-    const ventesAujourdhui = ventes.filter(v => v.date === today);
-    const caJour = ventesAujourdhui.reduce((s, v) => s + v.total, 0);
-    const totalDu = clients.reduce((s, c) => s + Math.max(clientSolde(c.id), 0), 0);
+  const renderCommandes = () => {
+    const commandeRecu = derniereCommandeId ? commandes.find(c => c.id === derniereCommandeId) : null;
     return (
-      <div>
-        <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Tableau de bord</div>
-            <div style={{ color: C.textSoft, fontSize: 13, marginBottom: 16 }}>{config.nomBoutique}</div>
-          </div>
-          <Btn kind="ghost" onClick={() => setDashboardAuthed(false)}><Lock size={13} /> Verrouiller</Btn>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.sage, fontWeight: 600 }}>{fmt(caJour, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>ventes aujourd'hui</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.ink, fontWeight: 600 }}>{fmt(totalVentes, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>chiffre d'affaires total</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.brass, fontWeight: 600 }}>{fmt(totalEncaisse, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>montant total encaissé</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.rose, fontWeight: 600 }}>{produitsAlerte.length}</div><div style={{ fontSize: 11, color: C.textSoft }}>produits en alerte stock</div></Card>
-          <Card style={{ textAlign: "center" }}><div className="f-mono" style={{ fontSize: 22, color: C.rose, fontWeight: 600 }}>{fmt(totalDu, config.devise)}</div><div style={{ fontSize: 11, color: C.textSoft }}>total dû par les clients</div></Card>
-        </div>
-        {produitsAlerte.length > 0 && (
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={16} color={C.rose} /> Produits à réapprovisionner</div>
-            {produitsAlerte.map(p => (
-              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5 }}>
-                <span>{p.nom}</span><span className="f-mono" style={{ color: C.rose, fontWeight: 700 }}>{p.stock} {p.unite}(s) restant(s)</span>
+    <div>
+      <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Commandes fournisseurs</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16 }}>
+        <Card className="no-print">
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Choisir les produits à commander</div>
+          <div style={{ maxHeight: 300, overflowY: "auto" }}>
+            {produits.map(p => (
+              <div key={p.id} onClick={() => ajouterAuPanierCommande(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 6px", borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
+                <div><div style={{ fontWeight: 600, fontSize: 13 }}>{p.nom}</div><div style={{ fontSize: 10.5, color: C.textSoft }}>Stock actuel : {p.stock} {p.unite}(s)</div></div>
+                <div className="f-mono" style={{ fontWeight: 700 }}>{fmt(p.prixAchat, config.devise)}</div>
               </div>
             ))}
-          </Card>
-        )}
+          </div>
+        </Card>
+
+        <Card className="no-print">
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Panier de commande</div>
+          {panierCommande.map(x => {
+            const p = produits.find(pr => pr.id === x.produitId);
+            if (!p) return null;
+            return (
+              <div key={x.produitId} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 0", borderBottom: `1px solid ${C.line}`, fontSize: 12.5 }}>
+                <div style={{ flex: 1 }}>{p.nom}</div>
+                <Input type="number" min="1" value={x.quantite} onChange={e => changerQuantitePanierCommande(x.produitId, e.target.value)} style={{ width: 55 }} />
+                <div className="f-mono" style={{ width: 90, textAlign: "right" }}>{fmt(p.prixAchat * x.quantite, config.devise)}</div>
+                <button onClick={() => retirerDuPanierCommande(x.produitId)} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={13} color={C.rose} /></button>
+              </div>
+            );
+          })}
+          {!panierCommande.length && <div style={{ fontSize: 12, color: C.textSoft }}>Panier vide — cliquez sur un produit à gauche.</div>}
+          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 15, margin: "10px 0", paddingTop: 8, borderTop: `2px solid ${C.ink}` }}>
+            <span>Total</span><span className="f-mono">{fmt(totalPanierCommande, config.devise)}</span>
+          </div>
+          <Input placeholder="Fournisseur" value={commandeFournisseur} onChange={e => setCommandeFournisseur(e.target.value)} style={{ width: "100%", marginBottom: 10, boxSizing: "border-box" }} />
+          <Btn onClick={validerCommande} disabled={!panierCommande.length} style={{ width: "100%", justifyContent: "center" }}>Valider la commande</Btn>
+        </Card>
       </div>
+
+      {commandeRecu && (
+        <Card className="print-area" style={{ marginTop: 16, border: `2px solid ${C.ink}`, padding: 22 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ width: 46, height: 46, borderRadius: "50%", border: `2px solid ${C.brass}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                {config.logo ? <img src={config.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ClipboardList size={20} color={C.brass} />}
+              </div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>{config.nomBoutique}</div>
+              {config.adresse && <div style={{ fontSize: 10.5, color: C.textSoft }}>{config.adresse}</div>}
+              {config.tels && <div style={{ fontSize: 10.5, color: C.textSoft }}>Tél : {config.tels}</div>}
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div className="f-display" style={{ fontSize: 18, fontWeight: 700 }}>BON DE COMMANDE</div>
+              <div style={{ fontSize: 11, color: C.textSoft }}>{commandeRecu.dateCommande}</div>
+              {commandeRecu.fournisseur && <div style={{ fontSize: 11, color: C.textSoft }}>Fournisseur : {commandeRecu.fournisseur}</div>}
+            </div>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 14, fontSize: 12.5, border: `1px solid ${C.text}` }}>
+            <thead><tr>
+              <th style={{ background: C.ink, color: "#fff", padding: "6px 8px", textAlign: "left", border: `1px solid ${C.ink}` }}>Produit</th>
+              <th style={{ background: C.ink, color: "#fff", padding: "6px 8px", border: `1px solid ${C.ink}` }}>Quantité</th>
+              <th style={{ background: C.ink, color: "#fff", padding: "6px 8px", border: `1px solid ${C.ink}` }}>Prix d'achat</th>
+              <th style={{ background: C.ink, color: "#fff", padding: "6px 8px", border: `1px solid ${C.ink}` }}>Total</th>
+            </tr></thead>
+            <tbody>
+              {commandeRecu.items.map((it, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "6px 8px", border: `1px solid ${C.line}` }}>{it.nom}</td>
+                  <td className="f-mono" style={{ padding: "6px 8px", textAlign: "center", border: `1px solid ${C.line}` }}>{it.quantite}</td>
+                  <td className="f-mono" style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}` }}>{fmt(it.prixAchat, config.devise)}</td>
+                  <td className="f-mono" style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}` }}>{fmt(it.prixAchat * it.quantite, config.devise)}</td>
+                </tr>
+              ))}
+              <tr style={{ background: C.paper, fontWeight: 700 }}>
+                <td colSpan={3} style={{ padding: "8px", textAlign: "right", border: `1px solid ${C.line}` }}>Total général</td>
+                <td className="f-mono" style={{ padding: "8px", textAlign: "right", border: `1px solid ${C.line}` }}>{fmt(commandeRecu.total, config.devise)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <Btn kind="ghost" className="no-print" onClick={() => window.print()} style={{ marginTop: 14 }}><Printer size={13} /> Imprimer le bon de commande</Btn>
+        </Card>
+      )}
+
+      <Card className="no-print">
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Historique des commandes (vérifiable à tout moment)</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><Th>Date</Th><Th>Produits</Th><Th>Total</Th><Th>Fournisseur</Th><Th>Statut</Th><Th>Actions</Th></tr></thead>
+          <tbody>
+            {[...commandes].reverse().map(c => (
+              <tr key={c.id}>
+                <Td>{c.dateCommande}</Td>
+                <Td style={{ fontSize: 11.5 }}>{c.items.map(it => `${it.nom} (${it.quantite})`).join(", ")}</Td>
+                <Td className="f-mono">{fmt(c.total, config.devise)}</Td>
+                <Td>{c.fournisseur || "—"}</Td>
+                <Td><Pill_ text={c.statut} color={c.statut === "Reçue" ? C.sage : C.brass} bg={c.statut === "Reçue" ? C.sageSoft : C.brassSoft} /></Td>
+                <Td>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Btn kind="ghost" onClick={() => setDerniereCommandeId(c.id)}><Printer size={12} /></Btn>
+                    {c.statut === "En attente" && (
+                      <>
+                        <Btn kind="ghost" onClick={() => receptionnerCommande(c.id)}><Check size={12} /> Reçue</Btn>
+                        <button onClick={() => supprimerCommande(c.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={14} color={C.rose} /></button>
+                      </>
+                    )}
+                  </div>
+                </Td>
+              </tr>
+            ))}
+            {!commandes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune commande.</Td></tr>}
+          </tbody>
+        </table>
+      </Card>
+    </div>
     );
   };
 
-  const renderProduits = () => {
+  const renderStock = () => {
+    const mouvementsCombines = [
+      ...arrivages.map(a => ({ date: a.date, produitId: a.produitId, type: "Entrée", quantite: a.quantite, detail: a.fournisseur || "Arrivage" })),
+      ...ventes.flatMap(v => v.items.map(it => ({ date: v.date, produitId: it.produitId, type: "Sortie", quantite: it.quantite, detail: "Vente" }))),
+    ].sort((a, b) => b.date.localeCompare(a.date));
+
+    const quantiteVendue = (produitId) => ventes.reduce((s, v) => s + v.items.filter(it => it.produitId === produitId).reduce((s2, it) => s2 + it.quantite, 0), 0);
+
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Produits</div>
+          <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Stock</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn kind="ghost" onClick={() => exportCSV("produits.csv", ["Nom", "Catégorie", "Prix achat", "Prix vente", "Stock", "Seuil alerte", "Unité"], produits.map(p => [p.nom, p.categorie, p.prixAchat, p.prixVente, p.stock, p.seuilAlerte, p.unite]))}><Download size={13} /> Exporter</Btn>
-            <Btn onClick={() => setProduitForm({ nom: "", categorie: "", prixAchat: "", prixVente: "", stock: 0, seuilAlerte: 5, unite: "pièce" })}><Plus size={13} /> Ajouter</Btn>
+            <Btn kind="ghost" onClick={() => exportCSV(
+              "stock.csv",
+              ["Date", "Nom du produit", "Quantité", "Prix achat unitaire", "Prix vente unitaire", "Montant total achat", "Montant total ventes", "Bénéfices", "Seuil alerte"],
+              produits.map(p => { const qv = quantiteVendue(p.id); const mAchat = qv * p.prixAchat; const mVente = qv * p.prixVente; return [p.dateAjout || "", p.nom, p.stock, p.prixAchat, p.prixVente, mAchat, mVente, mVente - mAchat, p.seuilAlerte]; })
+            )}><Download size={13} /> Exporter</Btn>
+            <Btn onClick={() => setProduitForm({ nom: "", categorie: "", prixAchat: "", prixVente: "", stock: 0, seuilAlerte: 5, unite: "pièce", dateAjout: today })}><Plus size={13} /> Ajouter un produit</Btn>
           </div>
         </div>
 
@@ -401,13 +511,14 @@ export default function App() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <Input placeholder="Nom du produit" value={produitForm.nom} onChange={e => setProduitForm({ ...produitForm, nom: e.target.value })} />
               <Input placeholder="Catégorie" value={produitForm.categorie} onChange={e => setProduitForm({ ...produitForm, categorie: e.target.value })} />
-              <Input type="number" placeholder="Prix d'achat" value={produitForm.prixAchat} onChange={e => setProduitForm({ ...produitForm, prixAchat: e.target.value })} />
-              <Input type="number" placeholder="Prix de vente" value={produitForm.prixVente} onChange={e => setProduitForm({ ...produitForm, prixVente: e.target.value })} />
-              <Input type="number" placeholder="Stock actuel" value={produitForm.stock} onChange={e => setProduitForm({ ...produitForm, stock: e.target.value })} disabled={!!produitForm.id} />
-              <Input type="number" placeholder="Seuil d'alerte" value={produitForm.seuilAlerte} onChange={e => setProduitForm({ ...produitForm, seuilAlerte: e.target.value })} />
+              <Input type="number" placeholder="Prix d'achat unitaire" value={produitForm.prixAchat} onChange={e => setProduitForm({ ...produitForm, prixAchat: e.target.value })} />
+              <Input type="number" placeholder="Prix de vente unitaire" value={produitForm.prixVente} onChange={e => setProduitForm({ ...produitForm, prixVente: e.target.value })} />
+              <Input type="number" placeholder="Quantité en stock" value={produitForm.stock} onChange={e => setProduitForm({ ...produitForm, stock: e.target.value })} disabled={!!produitForm.id} />
+              <Input type="number" placeholder="Quantité pour l'alerte" value={produitForm.seuilAlerte} onChange={e => setProduitForm({ ...produitForm, seuilAlerte: e.target.value })} />
               <Input placeholder="Unité (pièce, sac, litre...)" value={produitForm.unite} onChange={e => setProduitForm({ ...produitForm, unite: e.target.value })} />
+              <Input type="date" value={produitForm.dateAjout || today} onChange={e => setProduitForm({ ...produitForm, dateAjout: e.target.value })} />
             </div>
-            {produitForm.id && <div style={{ fontSize: 10.5, color: C.textSoft, marginTop: 4 }}>Le stock ne se modifie pas ici — utilisez "Réapprovisionner" dans la liste.</div>}
+            {produitForm.id && <div style={{ fontSize: 10.5, color: C.textSoft, marginTop: 4 }}>La quantité en stock ne se modifie pas ici — utilisez le bouton 🚚 "Arrivage" dans la liste.</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <Btn onClick={saveProduit}><Check size={13} /> Enregistrer</Btn>
               <Btn kind="ghost" onClick={() => setProduitForm(null)}><X size={13} /> Annuler</Btn>
@@ -415,19 +526,30 @@ export default function App() {
           </Card>
         )}
 
-        <Card style={{ padding: 0 }}>
+        <Card style={{ padding: 0, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><Th>Produit</Th><Th>Catégorie</Th><Th>Prix achat</Th><Th>Prix vente</Th><Th>Stock</Th><Th>Actions</Th></tr></thead>
+            <thead><tr>
+              <Th>Date</Th><Th>Nom du produit</Th><Th>Quantité</Th><Th>Prix achat unit.</Th><Th>Prix vente unit.</Th>
+              <Th>Montant total achat</Th><Th>Montant total ventes</Th><Th>Bénéfices</Th><Th>Seuil alerte</Th><Th>Actions</Th>
+            </tr></thead>
             <tbody>
               {produits.map(p => {
                 const enAlerte = p.stock <= p.seuilAlerte;
+                const qv = quantiteVendue(p.id);
+                const mAchat = qv * p.prixAchat;
+                const mVente = qv * p.prixVente;
+                const benefice = mVente - mAchat;
                 return (
                   <tr key={p.id}>
+                    <Td>{p.dateAjout || "—"}</Td>
                     <Td style={{ fontWeight: 600 }}>{p.nom}</Td>
-                    <Td>{p.categorie}</Td>
+                    <Td><Pill_ text={`${p.stock} ${p.unite}(s)`} color={enAlerte ? C.rose : C.sage} bg={enAlerte ? C.roseSoft : C.sageSoft} /></Td>
                     <Td className="f-mono">{fmt(p.prixAchat, config.devise)}</Td>
                     <Td className="f-mono">{fmt(p.prixVente, config.devise)}</Td>
-                    <Td><Pill_ text={`${p.stock} ${p.unite}(s)`} color={enAlerte ? C.rose : C.sage} bg={enAlerte ? C.roseSoft : C.sageSoft} /></Td>
+                    <Td className="f-mono">{fmt(mAchat, config.devise)}</Td>
+                    <Td className="f-mono">{fmt(mVente, config.devise)}</Td>
+                    <Td className="f-mono" style={{ color: C.brass, fontWeight: 700 }}>{fmt(benefice, config.devise)}</Td>
+                    <Td className="f-mono">{p.seuilAlerte}</Td>
                     <Td>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => setArrivageForm({ produitId: p.id, quantite: "", date: today, fournisseur: "" })} style={{ background: "none", border: "none", cursor: "pointer" }} title="Enregistrer un arrivage"><Truck size={14} color={C.brass} /></button>
@@ -438,7 +560,7 @@ export default function App() {
                   </tr>
                 );
               })}
-              {!produits.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucun produit.</Td></tr>}
+              {!produits.length && <tr><Td colSpan={10} style={{ textAlign: "center", color: C.textSoft }}>Aucun produit.</Td></tr>}
             </tbody>
           </table>
         </Card>
@@ -456,98 +578,8 @@ export default function App() {
           </Card>
         )}
 
-        {arrivages.length > 0 && (
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Historique des arrivages</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><Th>Date</Th><Th>Produit</Th><Th>Quantité</Th><Th>Fournisseur</Th></tr></thead>
-              <tbody>{[...arrivages].reverse().map(a => (
-                <tr key={a.id}><Td>{a.date}</Td><Td style={{ fontWeight: 600 }}>{produits.find(p => p.id === a.produitId)?.nom}</Td><Td className="f-mono">+{a.quantite}</Td><Td>{a.fournisseur || "—"}</Td></tr>
-              ))}</tbody>
-            </table>
-          </Card>
-        )}
-      </div>
-    );
-  };
-
-  const renderCommandes = () => (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Commandes fournisseurs</div>
-        <Btn onClick={() => setCommandeForm({ produitId: produits[0]?.id || "", quantite: "", fournisseur: "" })}><Plus size={13} /> Nouvelle commande</Btn>
-      </div>
-      {commandeForm && (
         <Card>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Select value={commandeForm.produitId} onChange={e => setCommandeForm({ ...commandeForm, produitId: e.target.value })}>
-              {produits.map(p => <option key={p.id} value={p.id}>{p.nom}</option>)}
-            </Select>
-            <Input type="number" placeholder="Quantité commandée" value={commandeForm.quantite} onChange={e => setCommandeForm({ ...commandeForm, quantite: e.target.value })} />
-            <Input placeholder="Fournisseur" value={commandeForm.fournisseur} onChange={e => setCommandeForm({ ...commandeForm, fournisseur: e.target.value })} />
-            <Btn onClick={creerCommande}><Check size={13} /> Enregistrer</Btn>
-            <Btn kind="ghost" onClick={() => setCommandeForm(null)}><X size={13} /></Btn>
-          </div>
-        </Card>
-      )}
-      <Card style={{ padding: 0 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><Th>Date</Th><Th>Produit</Th><Th>Quantité</Th><Th>Fournisseur</Th><Th>Statut</Th><Th>Actions</Th></tr></thead>
-          <tbody>
-            {[...commandes].reverse().map(c => (
-              <tr key={c.id}>
-                <Td>{c.dateCommande}</Td>
-                <Td style={{ fontWeight: 600 }}>{produits.find(p => p.id === c.produitId)?.nom}</Td>
-                <Td className="f-mono">{c.quantite}</Td>
-                <Td>{c.fournisseur || "—"}</Td>
-                <Td><Pill_ text={c.statut} color={c.statut === "Reçue" ? C.sage : C.brass} bg={c.statut === "Reçue" ? C.sageSoft : C.brassSoft} /></Td>
-                <Td>
-                  {c.statut === "En attente" ? (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Btn kind="ghost" onClick={() => receptionnerCommande(c.id)}><Check size={12} /> Reçue</Btn>
-                      <button onClick={() => supprimerCommande(c.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={14} color={C.rose} /></button>
-                    </div>
-                  ) : <span style={{ fontSize: 11, color: C.textSoft }}>Reçue le {c.dateReception}</span>}
-                </Td>
-              </tr>
-            ))}
-            {!commandes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune commande.</Td></tr>}
-          </tbody>
-        </table>
-      </Card>
-    </div>
-  );
-
-  const renderStock = () => {
-    const mouvementsCombines = [
-      ...arrivages.map(a => ({ date: a.date, produitId: a.produitId, type: "Entrée", quantite: a.quantite, detail: a.fournisseur || "Arrivage" })),
-      ...ventes.flatMap(v => v.items.map(it => ({ date: v.date, produitId: it.produitId, type: "Sortie", quantite: it.quantite, detail: "Vente" }))),
-    ].sort((a, b) => b.date.localeCompare(a.date));
-
-    return (
-      <div>
-        <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Stock en temps réel</div>
-        <Card style={{ padding: 0 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><Th>Produit</Th><Th>Catégorie</Th><Th>Stock actuel</Th><Th>Statut</Th></tr></thead>
-            <tbody>
-              {produits.map(p => {
-                const enAlerte = p.stock <= p.seuilAlerte;
-                return (
-                  <tr key={p.id}>
-                    <Td style={{ fontWeight: 600 }}>{p.nom}</Td>
-                    <Td>{p.categorie}</Td>
-                    <Td className="f-mono" style={{ fontWeight: 700 }}>{p.stock} {p.unite}(s)</Td>
-                    <Td><Pill_ text={enAlerte ? "Stock faible" : "Correct"} color={enAlerte ? C.rose : C.sage} bg={enAlerte ? C.roseSoft : C.sageSoft} /></Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
-
-        <Card>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Mouvements (entrées et sorties)</div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Mouvements (entrées et sorties, en temps réel)</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><Th>Date</Th><Th>Produit</Th><Th>Type</Th><Th>Quantité</Th><Th>Détail</Th></tr></thead>
             <tbody>
@@ -614,8 +646,18 @@ export default function App() {
 
             <Select value={venteClientId} onChange={e => setVenteClientId(e.target.value)} style={{ width: "100%", marginBottom: 6, boxSizing: "border-box" }}>
               <option value="">Client anonyme (vente au comptant)</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
+              {clients.map(c => <option key={c.id} value={c.id}>{c.prenoms} {c.nom}</option>)}
             </Select>
+            {venteClientId && (() => {
+              const cl = clients.find(c => c.id === venteClientId);
+              if (!cl) return null;
+              return (
+                <div style={{ background: C.paper, borderRadius: 8, padding: "6px 10px", fontSize: 11, color: C.textSoft, marginBottom: 6 }}>
+                  {cl.sexe} · {cl.telephone || "sans numéro"} · {[cl.quartier, cl.profession].filter(Boolean).join(" — ") || "aucune autre info"}
+                  {clientSolde(cl.id) > 0 && <div style={{ color: C.rose, fontWeight: 700, marginTop: 2 }}>Doit déjà {fmt(clientSolde(cl.id), config.devise)}</div>}
+                </div>
+              );
+            })()}
             <Input type="number" placeholder={`Montant payé (par défaut : ${fmt(totalPanier, config.devise)})`} value={venteMontantPaye} onChange={e => setVenteMontantPaye(e.target.value)} style={{ width: "100%", marginBottom: 6, boxSizing: "border-box" }} />
             {venteMontantPaye !== "" && Number(venteMontantPaye) < totalPanier && (
               <div style={{ marginBottom: 6 }}>
@@ -649,7 +691,7 @@ export default function App() {
                   <div style={{ fontSize: 11, color: C.textSoft }}>{recu.date}</div>
                 </div>
               </div>
-              <div style={{ marginTop: 14, fontSize: 12.5 }}>Client : <b>{client ? client.nom : "Vente au comptant"}</b></div>
+              <div style={{ marginTop: 14, fontSize: 12.5 }}>Client : <b>{client ? `${client.prenoms} ${client.nom}` : "Vente au comptant"}</b></div>
               <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10, fontSize: 12.5, border: `1px solid ${C.text}` }}>
                 <thead><tr>
                   <th style={{ background: C.ink, color: "#fff", padding: "6px 8px", textAlign: "left", border: `1px solid ${C.ink}` }}>Article</th>
@@ -672,6 +714,7 @@ export default function App() {
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}><span>Total</span><span className="f-mono">{fmt(recu.total, config.devise)}</span></div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}><span>Montant payé</span><span className="f-mono">{fmt(recu.montantPaye, config.devise)}</span></div>
                 {recu.total - recu.montantPaye > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: C.rose, fontWeight: 700 }}><span>Reste dû</span><span className="f-mono">{fmt(recu.total - recu.montantPaye, config.devise)}</span></div>}
+                {recu.dateEcheance && <div style={{ display: "flex", justifyContent: "space-between", color: C.rose }}><span>Date de paiement prévue</span><span className="f-mono">{recu.dateEcheance}</span></div>}
               </div>
               <div style={{ marginTop: 20, fontSize: 10.5, fontStyle: "italic", color: C.textSoft }}>Merci de votre confiance.</div>
               <Btn kind="ghost" className="no-print" onClick={() => window.print()} style={{ marginTop: 14 }}><Printer size={13} /> Imprimer le reçu</Btn>
@@ -679,53 +722,7 @@ export default function App() {
           );
         })()}
 
-        <Card className="no-print">
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Historique des ventes</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><Th>Date</Th><Th>Client</Th><Th>Total</Th><Th>Payé</Th><Th>Mode</Th><Th>Actions</Th></tr></thead>
-            <tbody>
-              {[...ventes].reverse().map(v => {
-                const client = clients.find(c => c.id === v.clientId);
-                return (
-                  <tr key={v.id}>
-                    <Td>{v.date}</Td>
-                    <Td>{client ? client.nom : "Comptant"}</Td>
-                    <Td className="f-mono">{fmt(v.total, config.devise)}</Td>
-                    {venteEnEdition === v.id ? (
-                      <>
-                        <Td><Input type="number" defaultValue={v.montantPaye} id={`edit-paye-${v.id}`} style={{ width: 90 }} /></Td>
-                        <Td>
-                          <Select defaultValue={v.mode} id={`edit-mode-${v.id}`}>
-                            <option>Espèces</option><option>Orange Money</option><option>Mobile Money (autre)</option><option>Virement</option>
-                          </Select>
-                        </Td>
-                        <Td>
-                          <div style={{ display: "flex", gap: 4 }}>
-                            <Btn kind="ghost" onClick={() => modifierVente(v.id, document.getElementById(`edit-paye-${v.id}`).value, document.getElementById(`edit-mode-${v.id}`).value)}><Check size={12} /></Btn>
-                            <Btn kind="ghost" onClick={() => setVenteEnEdition(null)}><X size={12} /></Btn>
-                          </div>
-                        </Td>
-                      </>
-                    ) : (
-                      <>
-                        <Td className="f-mono" style={{ color: v.montantPaye < v.total ? C.rose : C.sage }}>{fmt(v.montantPaye, config.devise)}</Td>
-                        <Td style={{ fontSize: 11.5 }}>{v.mode}</Td>
-                        <Td>
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <Btn kind="ghost" onClick={() => setDerniereVenteId(v.id)}><Printer size={12} /></Btn>
-                            <button onClick={() => setVenteEnEdition(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Pencil size={14} color={C.textSoft} /></button>
-                            <button onClick={() => supprimerVente(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={14} color={C.rose} /></button>
-                          </div>
-                        </Td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-              {!ventes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
-            </tbody>
-          </table>
-        </Card>
+        <div className="no-print" style={{ fontSize: 11.5, color: C.textSoft, marginTop: 6 }}>L'historique complet des ventes est disponible dans le menu <b>Comptabilité → Historique</b>.</div>
       </div>
     );
   };
@@ -735,19 +732,20 @@ export default function App() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Clients</div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn kind="ghost" onClick={() => exportCSV("clients.csv", ["Nom", "Téléphone", "Quartier", "Profession", "Total acheté", "Solde dû"], clients.map(c => [c.nom, c.telephone, c.quartier || "", c.profession || "", clientTotalAchats(c.id), Math.max(clientSolde(c.id), 0)]))}><Download size={13} /> Exporter</Btn>
-          <Btn onClick={() => setClientForm({ nom: "", telephone: "", adresse: "", quartier: "", profession: "" })}><Plus size={13} /> Ajouter</Btn>
+          <Btn kind="ghost" onClick={() => exportCSV("clients.csv", ["Prénoms", "Nom", "Sexe", "Numéro", "Quartier", "Fonction", "Total acheté", "Solde dû"], clients.map(c => [c.prenoms, c.nom, c.sexe, c.telephone, c.quartier || "", c.profession || "", clientTotalAchats(c.id), Math.max(clientSolde(c.id), 0)]))}><Download size={13} /> Exporter</Btn>
+          <Btn onClick={() => setClientForm({ prenoms: "", nom: "", sexe: "F", telephone: "", quartier: "", profession: "" })}><Plus size={13} /> Ajouter</Btn>
         </div>
       </div>
 
       {clientForm && (
         <Card>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            <Input placeholder="Prénoms" value={clientForm.prenoms || ""} onChange={e => setClientForm({ ...clientForm, prenoms: e.target.value })} />
             <Input placeholder="Nom" value={clientForm.nom} onChange={e => setClientForm({ ...clientForm, nom: e.target.value })} />
-            <Input placeholder="Téléphone" value={clientForm.telephone} onChange={e => setClientForm({ ...clientForm, telephone: e.target.value })} />
+            <Select value={clientForm.sexe || "F"} onChange={e => setClientForm({ ...clientForm, sexe: e.target.value })}><option value="F">Féminin</option><option value="M">Masculin</option></Select>
+            <Input placeholder="Numéro (téléphone)" value={clientForm.telephone} onChange={e => setClientForm({ ...clientForm, telephone: e.target.value })} />
             <Input placeholder="Quartier" value={clientForm.quartier || ""} onChange={e => setClientForm({ ...clientForm, quartier: e.target.value })} />
-            <Input placeholder="Profession" value={clientForm.profession || ""} onChange={e => setClientForm({ ...clientForm, profession: e.target.value })} />
-            <Input placeholder="Adresse" value={clientForm.adresse} onChange={e => setClientForm({ ...clientForm, adresse: e.target.value })} />
+            <Input placeholder="Fonction" value={clientForm.profession || ""} onChange={e => setClientForm({ ...clientForm, profession: e.target.value })} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <Btn onClick={saveClient}><Check size={13} /> Enregistrer</Btn>
@@ -761,7 +759,7 @@ export default function App() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Select value={remboursementForm.clientId} onChange={e => setRemboursementForm({ ...remboursementForm, clientId: e.target.value })}>
             <option value="">Choisir un client…</option>
-            {clients.filter(c => clientSolde(c.id) > 0).map(c => <option key={c.id} value={c.id}>{c.nom} — doit {fmt(clientSolde(c.id), config.devise)}</option>)}
+            {clients.filter(c => clientSolde(c.id) > 0).map(c => <option key={c.id} value={c.id}>{c.prenoms} {c.nom} — doit {fmt(clientSolde(c.id), config.devise)}</option>)}
           </Select>
           <Input type="number" placeholder="Montant reçu" value={remboursementForm.montant} onChange={e => setRemboursementForm({ ...remboursementForm, montant: e.target.value })} />
           <Select value={remboursementForm.mode} onChange={e => setRemboursementForm({ ...remboursementForm, mode: e.target.value })}>
@@ -773,14 +771,15 @@ export default function App() {
 
       <Card style={{ padding: 0 }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><Th>Nom</Th><Th>Téléphone</Th><Th>Quartier / Profession</Th><Th>Total acheté</Th><Th>Solde dû</Th><Th>Actions</Th></tr></thead>
+          <thead><tr><Th>Prénoms et Nom</Th><Th>Sexe</Th><Th>Numéro</Th><Th>Quartier / Fonction</Th><Th>Total acheté</Th><Th>Solde dû</Th><Th>Actions</Th></tr></thead>
           <tbody>
             {clients.map(c => {
               const solde = clientSolde(c.id);
               const retard = clientEnRetard(c.id);
               return (
                 <tr key={c.id}>
-                  <Td style={{ fontWeight: 600 }}>{c.nom}{retard && <div><Pill_ text="EN RETARD DE PAIEMENT" color={C.rose} bg={C.roseSoft} /></div>}</Td>
+                  <Td style={{ fontWeight: 600 }}>{c.prenoms} {c.nom}{retard && <div><Pill_ text="EN RETARD DE PAIEMENT" color={C.rose} bg={C.roseSoft} /></div>}</Td>
+                  <Td>{c.sexe}</Td>
                   <Td>{c.telephone}</Td>
                   <Td style={{ fontSize: 11.5, color: C.textSoft }}>{[c.quartier, c.profession].filter(Boolean).join(" — ")}</Td>
                   <Td className="f-mono">{fmt(clientTotalAchats(c.id), config.devise)}</Td>
@@ -794,19 +793,22 @@ export default function App() {
                 </tr>
               );
             })}
-            {!clients.length && <tr><Td colSpan={5} style={{ textAlign: "center", color: C.textSoft }}>Aucun client.</Td></tr>}
+            {!clients.length && <tr><Td colSpan={7} style={{ textAlign: "center", color: C.textSoft }}>Aucun client.</Td></tr>}
           </tbody>
         </table>
       </Card>
     </div>
   );
 
+  const CATEGORIES_DEPENSES = ["Achat de marchandises", "Frais de location", "Salaire", "Taxes", "Connexion", "Autres"];
   const renderDepenses = () => (
     <div>
       <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Dépenses</div>
       <Card>
         <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-          <Input placeholder="Catégorie" value={depForm.categorie} onChange={e => setDepForm({ ...depForm, categorie: e.target.value })} />
+          <Select value={depForm.categorie || CATEGORIES_DEPENSES[0]} onChange={e => setDepForm({ ...depForm, categorie: e.target.value })}>
+            {CATEGORIES_DEPENSES.map(c => <option key={c} value={c}>{c}</option>)}
+          </Select>
           <Input type="number" placeholder="Montant" value={depForm.montant} onChange={e => setDepForm({ ...depForm, montant: e.target.value })} />
           <Input placeholder="Description" value={depForm.description} onChange={e => setDepForm({ ...depForm, description: e.target.value })} style={{ flex: 1 }} />
           <Btn onClick={saveDepense}>{depForm.id ? <Check size={13} /> : <Plus size={13} />}</Btn>
@@ -828,7 +830,121 @@ export default function App() {
     </div>
   );
 
-  const renderRapports = () => {
+  const renderAlerte = () => {
+    const produitsAlerte = produits.filter(p => p.stock <= p.seuilAlerte);
+    const clientsRetard = clients.filter(c => clientEnRetard(c.id));
+    return (
+      <div>
+        <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Alerte</div>
+
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={16} color={C.rose} /> Produits en manque de stock ({produitsAlerte.length})</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><Th>Produit</Th><Th>Stock actuel</Th><Th>Seuil d'alerte</Th></tr></thead>
+            <tbody>
+              {produitsAlerte.map(p => (
+                <tr key={p.id}><Td style={{ fontWeight: 600 }}>{p.nom}</Td><Td className="f-mono" style={{ color: C.rose, fontWeight: 700 }}>{p.stock} {p.unite}(s)</Td><Td className="f-mono">{p.seuilAlerte}</Td></tr>
+              ))}
+              {!produitsAlerte.length && <tr><Td colSpan={3} style={{ textAlign: "center", color: C.sage }}>Aucun produit en manque.</Td></tr>}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={16} color={C.rose} /> Clients n'ayant pas réglé leur dette ({clientsRetard.length})</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><Th>Client</Th><Th>Numéro</Th><Th>Solde dû</Th></tr></thead>
+            <tbody>
+              {clientsRetard.map(c => (
+                <tr key={c.id}><Td style={{ fontWeight: 600 }}>{c.prenoms} {c.nom}</Td><Td>{c.telephone}</Td><Td className="f-mono" style={{ color: C.rose, fontWeight: 700 }}>{fmt(clientSolde(c.id), config.devise)}</Td></tr>
+              ))}
+              {!clientsRetard.length && <tr><Td colSpan={3} style={{ textAlign: "center", color: C.sage }}>Aucun retard de paiement.</Td></tr>}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderHistorique = () => (
+    <Card style={{ padding: 0 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr><Th>Date</Th><Th>Client</Th><Th>Total</Th><Th>Payé</Th><Th>Mode</Th><Th>Actions</Th></tr></thead>
+        <tbody>
+          {[...ventes].reverse().map(v => {
+            const client = clients.find(c => c.id === v.clientId);
+            return (
+              <tr key={v.id}>
+                <Td>{v.date}</Td>
+                <Td>{client ? `${client.prenoms} ${client.nom}` : "Comptant"}</Td>
+                <Td className="f-mono">{fmt(v.total, config.devise)}</Td>
+                {venteEnEdition === v.id ? (
+                  <>
+                    <Td><Input type="number" defaultValue={v.montantPaye} id={`edit-paye-${v.id}`} style={{ width: 90 }} /></Td>
+                    <Td>
+                      <Select defaultValue={v.mode} id={`edit-mode-${v.id}`}>
+                        <option>Espèces</option><option>Orange Money</option><option>Mobile Money (autre)</option><option>Virement</option>
+                      </Select>
+                    </Td>
+                    <Td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <Btn kind="ghost" onClick={() => modifierVente(v.id, document.getElementById(`edit-paye-${v.id}`).value, document.getElementById(`edit-mode-${v.id}`).value)}><Check size={12} /></Btn>
+                        <Btn kind="ghost" onClick={() => setVenteEnEdition(null)}><X size={12} /></Btn>
+                      </div>
+                    </Td>
+                  </>
+                ) : (
+                  <>
+                    <Td className="f-mono" style={{ color: v.montantPaye < v.total ? C.rose : C.sage }}>{fmt(v.montantPaye, config.devise)}</Td>
+                    <Td style={{ fontSize: 11.5 }}>{v.mode}</Td>
+                    <Td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <Btn kind="ghost" onClick={() => setDerniereVenteId(v.id)}><Printer size={12} /></Btn>
+                        <button onClick={() => setVenteEnEdition(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Pencil size={14} color={C.textSoft} /></button>
+                        <button onClick={() => supprimerVente(v.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={14} color={C.rose} /></button>
+                      </div>
+                    </Td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+          {!ventes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
+        </tbody>
+      </table>
+    </Card>
+  );
+
+  const renderComptabilite = () => {
+    if (!dashboardAuthed) return (
+      <Card style={{ width: 320, margin: "40px auto", textAlign: "center" }}>
+        <Lock size={22} color={C.brass} style={{ marginBottom: 8 }} />
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Comptabilité protégée</div>
+        <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10 }}>Les informations financières de la boutique sont réservées.</div>
+        <Input type="password" placeholder="Mot de passe" value={dashboardPwd} onChange={e => { setDashboardPwd(e.target.value); setDashboardErr(false); }}
+          onKeyDown={e => e.key === "Enter" && (dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true))}
+          style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+        {dashboardErr && <div style={{ color: C.rose, fontSize: 12, marginBottom: 8 }}>Mot de passe incorrect.</div>}
+        <Btn style={{ width: "100%", justifyContent: "center" }} onClick={() => dashboardPwd === (config.dashboardPassword || "Boutique2026") ? setDashboardAuthed(true) : setDashboardErr(true)}>Déverrouiller</Btn>
+      </Card>
+    );
+    return (
+    <div>
+      <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div className="f-display" style={{ fontSize: 22, fontWeight: 600 }}>Comptabilité</div>
+        <Btn kind="ghost" onClick={() => setDashboardAuthed(false)}><Lock size={13} /> Verrouiller</Btn>
+      </div>
+      <div style={{ color: C.textSoft, fontSize: 13, marginBottom: 16 }}>Archive de chaque vente, et bilan financier de la boutique.</div>
+      <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        <Btn kind={comptaTab === "historique" ? "primary" : "ghost"} onClick={() => setComptaTab("historique")}>Historique</Btn>
+        <Btn kind={comptaTab === "bilan" ? "primary" : "ghost"} onClick={() => setComptaTab("bilan")}>Bilan</Btn>
+      </div>
+      {comptaTab === "historique" ? renderHistorique() : renderBilan()}
+    </div>
+    );
+  };
+
+  const renderBilan = () => {
     const parProduit = {};
     ventes.forEach(v => v.items.forEach(it => { parProduit[it.produitId] = (parProduit[it.produitId] || 0) + it.quantite; }));
     const meilleuresVentes = Object.entries(parProduit).map(([id, q]) => ({ produit: produits.find(p => p.id === id), quantite: q })).filter(x => x.produit).sort((a, b) => b.quantite - a.quantite).slice(0, 10);
@@ -861,7 +977,7 @@ export default function App() {
 
     return (
       <div>
-        <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Rapports</div>
+        <div className="f-display" style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Bilan</div>
 
         <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <Select value={rapportPeriode} onChange={e => setRapportPeriode(e.target.value)}>
@@ -946,7 +1062,7 @@ export default function App() {
           </table>
         </Card>
 
-        <Btn kind="ghost" onClick={() => exportCSV("ventes.csv", ["Date", "Client", "Total", "Payé", "Mode"], ventes.map(v => [v.date, clients.find(c => c.id === v.clientId)?.nom || "Comptant", v.total, v.montantPaye, v.mode]))}><Download size={13} /> Exporter toutes les ventes</Btn>
+        <Btn kind="ghost" onClick={() => exportCSV("ventes.csv", ["Date", "Client", "Total", "Payé", "Mode"], ventes.map(v => { const cl = clients.find(c => c.id === v.clientId); return [v.date, cl ? `${cl.prenoms} ${cl.nom}` : "Comptant", v.total, v.montantPaye, v.mode]; }))}><Download size={13} /> Exporter toutes les ventes</Btn>
       </div>
     );
   };
@@ -981,15 +1097,15 @@ export default function App() {
   const items = [
     { k: "accueil", label: "Accueil", icon: Home },
     { k: "vente", label: "Vente / Caisse", icon: ShoppingCart },
-    { k: "produits", label: "Produits", icon: Package },
     { k: "stock", label: "Stock", icon: Layers },
     { k: "commandes", label: "Commandes", icon: ClipboardList },
     { k: "clients", label: "Clients", icon: Users },
+    { k: "comptabilite", label: "Comptabilité", icon: BarChart3 },
     { k: "depenses", label: "Dépenses", icon: Wallet },
-    { k: "rapports", label: "Rapports", icon: BarChart3 },
+    { k: "alerte", label: "Alerte", icon: AlertTriangle },
     { k: "parametres", label: "Paramètres", icon: Settings },
   ];
-  const pages = { accueil: renderAccueil, vente: renderVente, produits: renderProduits, stock: renderStock, commandes: renderCommandes, clients: renderClients, depenses: renderDepenses, rapports: renderRapports, parametres: renderParametres };
+  const pages = { accueil: renderAccueil, vente: renderVente, stock: renderStock, commandes: renderCommandes, clients: renderClients, comptabilite: renderComptabilite, depenses: renderDepenses, alerte: renderAlerte, parametres: renderParametres };
 
   return (
     <div className="f-body" style={{ minHeight: "100vh", background: C.paper, display: "flex" }}>
@@ -1011,6 +1127,13 @@ export default function App() {
             <it.icon size={17} />{sidebarOpen && <span style={{ fontSize: 13 }}>{it.label}</span>}
           </button>
         ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => { if (window.confirm("Se déconnecter ?")) supabase.auth.signOut(); }} style={{
+          background: "none", border: "none", color: "rgba(255,255,255,0.7)", padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 10, cursor: "pointer", borderTop: "1px solid rgba(255,255,255,0.1)",
+        }}>
+          <LogOut size={17} />{sidebarOpen && <span style={{ fontSize: 13 }}>Déconnexion</span>}
+        </button>
       </div>
       <div style={{ flex: 1, padding: 24, overflowY: "auto" }}>
         {pages[menu] ? pages[menu]() : null}
