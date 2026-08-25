@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient";
 import {
   Home, Package, ShoppingCart, Users, Wallet, BarChart3, Settings, Lock,
   Plus, Trash2, Pencil, Check, X, Printer, Download, Search, Menu as MenuIcon,
-  AlertTriangle, GraduationCap, ClipboardList, Truck, Layers, LogOut,
+  AlertTriangle, GraduationCap, ClipboardList, Truck, Layers, LogOut, Mic,
 } from "lucide-react";
 
 const C = {
@@ -57,6 +57,31 @@ function Td({ children, style, colSpan }) { return <td colSpan={colSpan} style={
 function Pill_({ text, color, bg }) { return <span style={{ background: bg, color, borderRadius: 999, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>{text}</span>; }
 
 function fmt(n, devise) { return `${Number(n || 0).toLocaleString("fr-FR")} ${devise || ""}`.trim(); }
+
+function envoyerWhatsApp(numero, texte) {
+  const propre = (numero || "").replace(/[^\d+]/g, "");
+  if (!propre) { window.alert("Aucun numéro de téléphone enregistré pour l'envoyer directement — la fenêtre WhatsApp va s'ouvrir, choisissez le contact manuellement."); }
+  const numeroFinal = propre ? (propre.startsWith("+") ? propre.replace("+", "") : (propre.startsWith("224") ? propre : `224${propre.replace(/^0/, "")}`)) : "";
+  const url = `https://wa.me/${numeroFinal}?text=${encodeURIComponent(texte)}`;
+  window.open(url, "_blank");
+}
+
+function analyserCommandeVocale(texte, produits, clients) {
+  const t = texte.toLowerCase();
+  const items = [];
+  produits.forEach(p => {
+    const nom = p.nom.toLowerCase();
+    if (t.includes(nom)) {
+      const echappe = nom.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const m = t.match(new RegExp(`(\\d+)\\s*(?:x\\s*)?${echappe}`, "i"));
+      items.push({ produitId: p.id, quantite: m ? parseInt(m[1]) : 1 });
+    }
+  });
+  let clientId = null;
+  clients.forEach(c => { if (t.includes(c.prenoms.toLowerCase()) || t.includes(c.nom.toLowerCase())) clientId = c.id; });
+  const mPaye = t.match(/pay[ée]?\s*(\d+)/);
+  return { items, clientId, montantPaye: mPaye ? parseInt(mPaye[1]) : null };
+}
 
 function exportCSV(filename, headers, rows) {
   const csv = [headers.join(";"), ...rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(";"))].join("\n");
@@ -152,7 +177,7 @@ export default function App() {
   const clientTotalAchats = (id) => ventes.filter(v => v.clientId === id).reduce((s, v) => s + v.total, 0);
   const clientTotalPaye = (id) => ventes.filter(v => v.clientId === id).reduce((s, v) => s + Number(v.montantPaye || 0), 0) + paiementsCredit.filter(p => p.clientId === id).reduce((s, p) => s + Number(p.montant), 0);
   const clientSolde = (id) => clientTotalAchats(id) - clientTotalPaye(id);
-  const clientEnRetard = (id) => clientSolde(id) > 0 && ventes.some(v => v.clientId === id && v.dateEcheance && v.dateEcheance < today && (v.total - v.montantPaye) > 0);
+  const clientEnRetard = (id) => clientSolde(id) > 0 && ventes.some(v => v.clientId === id && v.dateEcheance && v.dateEcheance < today && (v.total - venteMontantPayeActuel(v)) > 0);
 
   /* ---------- Comptabilité générale ---------- */
   const totalVentes = ventes.reduce((s, v) => s + v.total, 0);
@@ -185,6 +210,8 @@ export default function App() {
 
   const [panierCommande, setPanierCommande] = useState([]);
   const [commandeFournisseur, setCommandeFournisseur] = useState("");
+  const [commandeTelFournisseur, setCommandeTelFournisseur] = useState("");
+  const [commandeMontantPaye, setCommandeMontantPaye] = useState("");
   const [derniereCommandeId, setDerniereCommandeId] = useState(null);
   const ajouterAuPanierCommande = (produitId) => {
     setPanierCommande(prev => {
@@ -202,13 +229,15 @@ export default function App() {
 
   const validerCommande = () => {
     if (!panierCommande.length) return;
+    const montantPaye = commandeMontantPaye === "" ? totalPanierCommande : Number(commandeMontantPaye);
+    if (montantPaye > totalPanierCommande) { window.alert("Le montant payé ne peut pas dépasser le total de la commande."); return; }
     const id = uid("co");
     setCommandes(prev => [...prev, {
-      id, dateCommande: today, fournisseur: commandeFournisseur,
+      id, dateCommande: today, fournisseur: commandeFournisseur, telephoneFournisseur: commandeTelFournisseur,
       items: panierCommande.map(x => { const p = produits.find(pr => pr.id === x.produitId); return { produitId: x.produitId, nom: p.nom, prixAchat: p.prixAchat, quantite: x.quantite }; }),
-      total: totalPanierCommande, statut: "En attente",
+      total: totalPanierCommande, montantPaye, statut: "En attente",
     }]);
-    setPanierCommande([]); setCommandeFournisseur(""); setDerniereCommandeId(id);
+    setPanierCommande([]); setCommandeFournisseur(""); setCommandeTelFournisseur(""); setCommandeMontantPaye(""); setDerniereCommandeId(id);
   };
   const receptionnerCommande = (id) => {
     const c = commandes.find(x => x.id === id);
@@ -217,6 +246,16 @@ export default function App() {
     setCommandes(prev => prev.map(x => x.id === id ? { ...x, statut: "Reçue", dateReception: today } : x));
   };
   const supprimerCommande = (id) => { if (window.confirm("Annuler cette commande ?")) setCommandes(prev => prev.filter(c => c.id !== id)); };
+  const [reglementFournisseurForm, setReglementFournisseurForm] = useState({ commandeId: "", montant: "" });
+  const reglerFournisseur = () => {
+    const c = commandes.find(x => x.id === reglementFournisseurForm.commandeId);
+    if (!c || !reglementFournisseurForm.montant) return;
+    const du = c.total - c.montantPaye;
+    const montant = Number(reglementFournisseurForm.montant);
+    if (montant > du) { window.alert(`Ce montant dépasse ce qui reste dû à ce fournisseur (${fmt(du, config.devise)}).`); return; }
+    setCommandes(prev => prev.map(x => x.id === c.id ? { ...x, montantPaye: x.montantPaye + montant } : x));
+    setReglementFournisseurForm({ commandeId: "", montant: "" });
+  };
 
   /* ---------- Clients ---------- */
   const [clientForm, setClientForm] = useState(null);
@@ -285,15 +324,32 @@ export default function App() {
 
   /* ---------- Paiement de crédit (remboursement client) ---------- */
   const [remboursementForm, setRemboursementForm] = useState({ clientId: "", montant: "", mode: "Espèces" });
+  const venteMontantPayeActuel = (v) => v.montantPaye + paiementsCredit.reduce((s, pc) => s + (pc.allocations || []).filter(a => a.venteId === v.id).reduce((s2, a) => s2 + a.montant, 0), 0);
+
   const enregistrerRemboursement = () => {
     if (!remboursementForm.clientId || !remboursementForm.montant) return;
     const solde = clientSolde(remboursementForm.clientId);
-    if (Number(remboursementForm.montant) > solde) { window.alert(`Ce montant dépasse ce que le client doit encore (${fmt(solde, config.devise)}).`); return; }
-    setPaiementsCredit(prev => [...prev, { id: uid("pc"), ...remboursementForm, montant: Number(remboursementForm.montant), date: today }]);
+    let montantRestant = Number(remboursementForm.montant);
+    if (montantRestant > solde) { window.alert(`Ce montant dépasse ce que le client doit encore (${fmt(solde, config.devise)}).`); return; }
+
+    // Répartir le remboursement sur les ventes impayées les plus anciennes d'abord, pour que l'historique reste exact.
+    const ventesImpayees = ventes.filter(v => v.clientId === remboursementForm.clientId && venteMontantPayeActuel(v) < v.total).sort((a, b) => a.date.localeCompare(b.date));
+    const allocations = [];
+    for (const v of ventesImpayees) {
+      if (montantRestant <= 0) break;
+      const du = v.total - venteMontantPayeActuel(v);
+      const applique = Math.min(du, montantRestant);
+      if (applique > 0) { allocations.push({ venteId: v.id, montant: applique }); montantRestant -= applique; }
+    }
+    setPaiementsCredit(prev => [...prev, { id: uid("pc"), ...remboursementForm, montant: Number(remboursementForm.montant), date: today, allocations }]);
     setRemboursementForm({ clientId: "", montant: "", mode: "Espèces" });
   };
 
   const [venteEnEdition, setVenteEnEdition] = useState(null);
+  const [inventaireOuvert, setInventaireOuvert] = useState(false);
+  const [comptages, setComptages] = useState({});
+  const [ecouteVocale, setEcouteVocale] = useState(false);
+  const [transcriptVocal, setTranscriptVocal] = useState("");
   const [comptaTab, setComptaTab] = useState("historique");
   const [rapportPeriode, setRapportPeriode] = useState("jour");
   const [rapportDate, setRapportDate] = useState(today);
@@ -403,7 +459,9 @@ export default function App() {
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 15, margin: "10px 0", paddingTop: 8, borderTop: `2px solid ${C.ink}` }}>
             <span>Total</span><span className="f-mono">{fmt(totalPanierCommande, config.devise)}</span>
           </div>
-          <Input placeholder="Fournisseur" value={commandeFournisseur} onChange={e => setCommandeFournisseur(e.target.value)} style={{ width: "100%", marginBottom: 10, boxSizing: "border-box" }} />
+          <Input placeholder="Fournisseur" value={commandeFournisseur} onChange={e => setCommandeFournisseur(e.target.value)} style={{ width: "100%", marginBottom: 6, boxSizing: "border-box" }} />
+          <Input placeholder="Téléphone fournisseur (pour WhatsApp)" value={commandeTelFournisseur} onChange={e => setCommandeTelFournisseur(e.target.value)} style={{ width: "100%", marginBottom: 6, boxSizing: "border-box" }} />
+          <Input type="number" placeholder={`Montant payé au fournisseur (par défaut : ${fmt(totalPanierCommande, config.devise)})`} value={commandeMontantPaye} onChange={e => setCommandeMontantPaye(e.target.value)} style={{ width: "100%", marginBottom: 10, boxSizing: "border-box" }} />
           <Btn onClick={validerCommande} disabled={!panierCommande.length} style={{ width: "100%", justifyContent: "center" }}>Valider la commande</Btn>
         </Card>
       </div>
@@ -445,22 +503,37 @@ export default function App() {
                 <td colSpan={3} style={{ padding: "8px", textAlign: "right", border: `1px solid ${C.line}` }}>Total général</td>
                 <td className="f-mono" style={{ padding: "8px", textAlign: "right", border: `1px solid ${C.line}` }}>{fmt(commandeRecu.total, config.devise)}</td>
               </tr>
+              <tr>
+                <td colSpan={3} style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}` }}>Montant payé</td>
+                <td className="f-mono" style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}`, color: C.sage }}>{fmt(commandeRecu.montantPaye, config.devise)}</td>
+              </tr>
+              {commandeRecu.total - commandeRecu.montantPaye > 0 && (
+                <tr>
+                  <td colSpan={3} style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}`, fontWeight: 700 }}>Reste dû au fournisseur</td>
+                  <td className="f-mono" style={{ padding: "6px 8px", textAlign: "right", border: `1px solid ${C.line}`, color: C.rose, fontWeight: 700 }}>{fmt(commandeRecu.total - commandeRecu.montantPaye, config.devise)}</td>
+                </tr>
+              )}
             </tbody>
           </table>
           <Btn kind="ghost" className="no-print" onClick={() => window.print()} style={{ marginTop: 14 }}><Printer size={13} /> Imprimer le bon de commande</Btn>
+          <Btn kind="brass" className="no-print" onClick={() => envoyerWhatsApp(commandeRecu.telephoneFournisseur, `Bon de commande ${config.nomBoutique}\nDate : ${commandeRecu.dateCommande}\n${commandeRecu.items.map(it => `- ${it.nom} x${it.quantite} : ${fmt(it.prixAchat * it.quantite, config.devise)}`).join("\n")}\nTotal général : ${fmt(commandeRecu.total, config.devise)}\nPayé : ${fmt(commandeRecu.montantPaye, config.devise)}${commandeRecu.total - commandeRecu.montantPaye > 0 ? `\nReste dû : ${fmt(commandeRecu.total - commandeRecu.montantPaye, config.devise)}` : ""}`)} style={{ marginTop: 14, marginLeft: 8 }}>Envoyer par WhatsApp</Btn>
         </Card>
       )}
 
       <Card className="no-print">
         <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Historique des commandes (vérifiable à tout moment)</div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><Th>Date</Th><Th>Produits</Th><Th>Total</Th><Th>Fournisseur</Th><Th>Statut</Th><Th>Actions</Th></tr></thead>
+          <thead><tr><Th>Date</Th><Th>Produits</Th><Th>Total</Th><Th>Payé</Th><Th>Dû au fournisseur</Th><Th>Fournisseur</Th><Th>Statut</Th><Th>Actions</Th></tr></thead>
           <tbody>
-            {[...commandes].reverse().map(c => (
+            {[...commandes].reverse().map(c => {
+              const du = c.total - c.montantPaye;
+              return (
               <tr key={c.id}>
                 <Td>{c.dateCommande}</Td>
                 <Td style={{ fontSize: 11.5 }}>{c.items.map(it => `${it.nom} (${it.quantite})`).join(", ")}</Td>
                 <Td className="f-mono">{fmt(c.total, config.devise)}</Td>
+                <Td className="f-mono" style={{ color: du > 0 ? C.rose : C.sage }}>{fmt(c.montantPaye, config.devise)}</Td>
+                <Td className="f-mono" style={{ color: du > 0 ? C.rose : C.sage, fontWeight: 700 }}>{fmt(du, config.devise)}</Td>
                 <Td>{c.fournisseur || "—"}</Td>
                 <Td><Pill_ text={c.statut} color={c.statut === "Reçue" ? C.sage : C.brass} bg={c.statut === "Reçue" ? C.sageSoft : C.brassSoft} /></Td>
                 <Td>
@@ -475,10 +548,25 @@ export default function App() {
                   </div>
                 </Td>
               </tr>
-            ))}
-            {!commandes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune commande.</Td></tr>}
+              );
+            })}
+            {!commandes.length && <tr><Td colSpan={8} style={{ textAlign: "center", color: C.textSoft }}>Aucune commande.</Td></tr>}
           </tbody>
         </table>
+
+        {commandes.some(c => c.total - c.montantPaye > 0) && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Régler une dette envers un fournisseur</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Select value={reglementFournisseurForm.commandeId} onChange={e => setReglementFournisseurForm({ ...reglementFournisseurForm, commandeId: e.target.value })}>
+                <option value="">Choisir une commande…</option>
+                {commandes.filter(c => c.total - c.montantPaye > 0).map(c => <option key={c.id} value={c.id}>{c.dateCommande} — {c.fournisseur || "Sans nom"} — doit {fmt(c.total - c.montantPaye, config.devise)}</option>)}
+              </Select>
+              <Input type="number" placeholder="Montant versé" value={reglementFournisseurForm.montant} onChange={e => setReglementFournisseurForm({ ...reglementFournisseurForm, montant: e.target.value })} />
+              <Btn onClick={reglerFournisseur}>Enregistrer le paiement</Btn>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
     );
@@ -490,7 +578,12 @@ export default function App() {
       ...ventes.flatMap(v => v.items.map(it => ({ date: v.date, produitId: it.produitId, type: "Sortie", quantite: it.quantite, detail: "Vente" }))),
     ].sort((a, b) => b.date.localeCompare(a.date));
 
-    const quantiteVendue = (produitId) => ventes.reduce((s, v) => s + v.items.filter(it => it.produitId === produitId).reduce((s2, it) => s2 + it.quantite, 0), 0);
+    const previewQuantite = Number(produitForm?.stock) || 0;
+    const previewAchat = Number(produitForm?.prixAchat) || 0;
+    const previewVente = Number(produitForm?.prixVente) || 0;
+    const previewMontantAchat = previewQuantite * previewAchat;
+    const previewMontantVente = previewQuantite * previewVente;
+    const previewBenefice = previewMontantVente - previewMontantAchat;
 
     return (
       <div>
@@ -500,7 +593,7 @@ export default function App() {
             <Btn kind="ghost" onClick={() => exportCSV(
               "stock.csv",
               ["Date", "Nom du produit", "Quantité", "Prix achat unitaire", "Prix vente unitaire", "Montant total achat", "Montant total ventes", "Bénéfices", "Seuil alerte"],
-              produits.map(p => { const qv = quantiteVendue(p.id); const mAchat = qv * p.prixAchat; const mVente = qv * p.prixVente; return [p.dateAjout || "", p.nom, p.stock, p.prixAchat, p.prixVente, mAchat, mVente, mVente - mAchat, p.seuilAlerte]; })
+              produits.map(p => [p.dateAjout || "", p.nom, p.stock, p.prixAchat, p.prixVente, p.stock * p.prixAchat, p.stock * p.prixVente, (p.stock * p.prixVente) - (p.stock * p.prixAchat), p.seuilAlerte])
             )}><Download size={13} /> Exporter</Btn>
             <Btn onClick={() => setProduitForm({ nom: "", categorie: "", prixAchat: "", prixVente: "", stock: 0, seuilAlerte: 5, unite: "pièce", dateAjout: today })}><Plus size={13} /> Ajouter un produit</Btn>
           </div>
@@ -519,6 +612,13 @@ export default function App() {
               <Input type="date" value={produitForm.dateAjout || today} onChange={e => setProduitForm({ ...produitForm, dateAjout: e.target.value })} />
             </div>
             {produitForm.id && <div style={{ fontSize: 10.5, color: C.textSoft, marginTop: 4 }}>La quantité en stock ne se modifie pas ici — utilisez le bouton 🚚 "Arrivage" dans la liste.</div>}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12, background: C.paper, borderRadius: 8, padding: 10 }}>
+              <div><div style={{ fontSize: 10, color: C.textSoft }}>Montant total des achats</div><div className="f-mono" style={{ fontWeight: 700 }}>{fmt(previewMontantAchat, config.devise)}</div></div>
+              <div><div style={{ fontSize: 10, color: C.textSoft }}>Montant total des ventes</div><div className="f-mono" style={{ fontWeight: 700 }}>{fmt(previewMontantVente, config.devise)}</div></div>
+              <div><div style={{ fontSize: 10, color: C.textSoft }}>Bénéfice</div><div className="f-mono" style={{ fontWeight: 700, color: C.brass }}>{fmt(previewBenefice, config.devise)}</div></div>
+            </div>
+
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <Btn onClick={saveProduit}><Check size={13} /> Enregistrer</Btn>
               <Btn kind="ghost" onClick={() => setProduitForm(null)}><X size={13} /> Annuler</Btn>
@@ -535,9 +635,8 @@ export default function App() {
             <tbody>
               {produits.map(p => {
                 const enAlerte = p.stock <= p.seuilAlerte;
-                const qv = quantiteVendue(p.id);
-                const mAchat = qv * p.prixAchat;
-                const mVente = qv * p.prixVente;
+                const mAchat = p.stock * p.prixAchat;
+                const mVente = p.stock * p.prixVente;
                 const benefice = mVente - mAchat;
                 return (
                   <tr key={p.id}>
@@ -597,8 +696,61 @@ export default function App() {
           </table>
           {mouvementsCombines.length > 60 && <div style={{ fontSize: 11, color: C.textSoft, marginTop: 6 }}>Affichage des 60 mouvements les plus récents.</div>}
         </Card>
+
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Inventaire physique — détecter un écart (manque ou vol)</div>
+            <Btn kind={inventaireOuvert ? "ghost" : "brass"} onClick={() => setInventaireOuvert(o => !o)}>{inventaireOuvert ? "Fermer" : "Faire un comptage"}</Btn>
+          </div>
+          {inventaireOuvert && (
+            <div>
+              <div style={{ fontSize: 11.5, color: C.textSoft, marginBottom: 10 }}>Comptez physiquement chaque produit dans la boutique et entrez le chiffre trouvé. L'écart avec ce que l'application attend s'affiche automatiquement — un écart négatif signale un manque à expliquer.</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><Th>Produit</Th><Th>Stock attendu (application)</Th><Th>Quantité comptée</Th><Th>Écart</Th></tr></thead>
+                <tbody>
+                  {produits.map(p => {
+                    const compte = comptages[p.id];
+                    const ecart = compte !== undefined && compte !== "" ? Number(compte) - p.stock : null;
+                    return (
+                      <tr key={p.id}>
+                        <Td style={{ fontWeight: 600 }}>{p.nom}</Td>
+                        <Td className="f-mono">{p.stock} {p.unite}(s)</Td>
+                        <Td><Input type="number" placeholder="—" value={compte ?? ""} onChange={e => setComptages(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ width: 80 }} /></Td>
+                        <Td className="f-mono" style={{ fontWeight: 700, color: ecart == null ? C.textSoft : ecart < 0 ? C.rose : ecart > 0 ? C.brass : C.sage }}>
+                          {ecart == null ? "—" : (ecart > 0 ? `+${ecart}` : ecart)}
+                          {ecart != null && ecart < 0 && <span style={{ fontWeight: 400, fontSize: 10 }}> (manquant)</span>}
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <Btn kind="ghost" onClick={() => setComptages({})} style={{ marginTop: 10 }}>Réinitialiser le comptage</Btn>
+            </div>
+          )}
+        </Card>
       </div>
     );
+  };
+
+  const demarrerEcouteVocale = () => {
+    const Reco = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Reco) { window.alert("La reconnaissance vocale n'est pas disponible sur ce navigateur. Utilisez Google Chrome pour cette fonctionnalité."); return; }
+    const reco = new Reco();
+    reco.lang = "fr-FR";
+    reco.interimResults = false;
+    reco.onstart = () => setEcouteVocale(true);
+    reco.onend = () => setEcouteVocale(false);
+    reco.onerror = () => setEcouteVocale(false);
+    reco.onresult = (e) => {
+      const texte = e.results[0][0].transcript;
+      setTranscriptVocal(texte);
+      const { items, clientId, montantPaye } = analyserCommandeVocale(texte, produits, clients);
+      items.forEach(it => { for (let i = 0; i < it.quantite; i++) ajouterAuPanier(it.produitId); });
+      if (clientId) setVenteClientId(clientId);
+      if (montantPaye != null) setVenteMontantPaye(String(montantPaye));
+    };
+    reco.start();
   };
 
   const renderVente = () => {
@@ -625,7 +777,13 @@ export default function App() {
           </Card>
 
           <Card className="no-print">
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Panier</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>Panier</div>
+              <button onClick={demarrerEcouteVocale} title="Dicter la vente à la voix" style={{ background: ecouteVocale ? C.rose : C.brassSoft, color: ecouteVocale ? "#fff" : C.brass, border: "none", borderRadius: 20, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
+                <Mic size={13} /> {ecouteVocale ? "Écoute…" : "Voix"}
+              </button>
+            </div>
+            {transcriptVocal && <div style={{ fontSize: 10.5, color: C.textSoft, background: C.paper, borderRadius: 6, padding: "5px 8px", marginBottom: 8 }}>🎤 « {transcriptVocal} »</div>}
             {panier.map(x => {
               const p = produits.find(pr => pr.id === x.produitId);
               if (!p) return null;
@@ -717,7 +875,10 @@ export default function App() {
                 {recu.dateEcheance && <div style={{ display: "flex", justifyContent: "space-between", color: C.rose }}><span>Date de paiement prévue</span><span className="f-mono">{recu.dateEcheance}</span></div>}
               </div>
               <div style={{ marginTop: 20, fontSize: 10.5, fontStyle: "italic", color: C.textSoft }}>Merci de votre confiance.</div>
-              <Btn kind="ghost" className="no-print" onClick={() => window.print()} style={{ marginTop: 14 }}><Printer size={13} /> Imprimer le reçu</Btn>
+              <div className="no-print" style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <Btn kind="ghost" onClick={() => window.print()}><Printer size={13} /> Imprimer le reçu</Btn>
+                <Btn kind="brass" onClick={() => envoyerWhatsApp(client?.telephone, `Reçu ${config.nomBoutique}\nDate : ${recu.date}\n${recu.items.map(it => `- ${it.nom} x${it.quantite} : ${fmt(it.prixUnitaire * it.quantite, config.devise)}`).join("\n")}\nTotal : ${fmt(recu.total, config.devise)}\nPayé : ${fmt(recu.montantPaye, config.devise)}${recu.total - recu.montantPaye > 0 ? `\nReste dû : ${fmt(recu.total - recu.montantPaye, config.devise)} (avant le ${recu.dateEcheance || "—"})` : ""}\nMerci de votre confiance.`)}>Envoyer par WhatsApp</Btn>
+              </div>
             </Card>
           );
         })()}
@@ -833,6 +994,7 @@ export default function App() {
   const renderAlerte = () => {
     const produitsAlerte = produits.filter(p => p.stock <= p.seuilAlerte);
     const clientsRetard = clients.filter(c => clientEnRetard(c.id));
+    const commandesDues = commandes.filter(c => c.total - c.montantPaye > 0);
     return (
       <div>
         <div className="f-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>Alerte</div>
@@ -846,6 +1008,19 @@ export default function App() {
                 <tr key={p.id}><Td style={{ fontWeight: 600 }}>{p.nom}</Td><Td className="f-mono" style={{ color: C.rose, fontWeight: 700 }}>{p.stock} {p.unite}(s)</Td><Td className="f-mono">{p.seuilAlerte}</Td></tr>
               ))}
               {!produitsAlerte.length && <tr><Td colSpan={3} style={{ textAlign: "center", color: C.sage }}>Aucun produit en manque.</Td></tr>}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={16} color={C.rose} /> Fournisseurs à régler ({commandesDues.length})</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><Th>Fournisseur</Th><Th>Date commande</Th><Th>Reste dû</Th></tr></thead>
+            <tbody>
+              {commandesDues.map(c => (
+                <tr key={c.id}><Td style={{ fontWeight: 600 }}>{c.fournisseur || "Sans nom"}</Td><Td>{c.dateCommande}</Td><Td className="f-mono" style={{ color: C.rose, fontWeight: 700 }}>{fmt(c.total - c.montantPaye, config.devise)}</Td></tr>
+              ))}
+              {!commandesDues.length && <tr><Td colSpan={3} style={{ textAlign: "center", color: C.sage }}>Aucune dette envers un fournisseur.</Td></tr>}
             </tbody>
           </table>
         </Card>
@@ -867,16 +1042,18 @@ export default function App() {
   };
 
   const renderHistorique = () => (
-    <Card style={{ padding: 0 }}>
+    <Card style={{ padding: 0, overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead><tr><Th>Date</Th><Th>Client</Th><Th>Total</Th><Th>Payé</Th><Th>Mode</Th><Th>Actions</Th></tr></thead>
+        <thead><tr><Th>Date</Th><Th>Client</Th><Th>Articles vendus</Th><Th>Total</Th><Th>Payé à ce jour</Th><Th>Mode</Th><Th>Actions</Th></tr></thead>
         <tbody>
           {[...ventes].reverse().map(v => {
             const client = clients.find(c => c.id === v.clientId);
+            const payeActuel = venteMontantPayeActuel(v);
             return (
               <tr key={v.id}>
                 <Td>{v.date}</Td>
                 <Td>{client ? `${client.prenoms} ${client.nom}` : "Comptant"}</Td>
+                <Td style={{ fontSize: 11.5 }}>{v.items.map(it => `${it.nom} (${it.quantite})`).join(", ")}</Td>
                 <Td className="f-mono">{fmt(v.total, config.devise)}</Td>
                 {venteEnEdition === v.id ? (
                   <>
@@ -895,7 +1072,10 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <Td className="f-mono" style={{ color: v.montantPaye < v.total ? C.rose : C.sage }}>{fmt(v.montantPaye, config.devise)}</Td>
+                    <Td className="f-mono" style={{ color: payeActuel < v.total ? C.rose : C.sage, fontWeight: 700 }}>
+                      {fmt(payeActuel, config.devise)}
+                      {payeActuel !== v.montantPaye && <div style={{ fontSize: 9.5, color: C.textSoft, fontWeight: 400 }}>dont {fmt(payeActuel - v.montantPaye, config.devise)} réglé après-coup</div>}
+                    </Td>
                     <Td style={{ fontSize: 11.5 }}>{v.mode}</Td>
                     <Td>
                       <div style={{ display: "flex", gap: 6 }}>
@@ -909,11 +1089,50 @@ export default function App() {
               </tr>
             );
           })}
-          {!ventes.length && <tr><Td colSpan={6} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
+          {!ventes.length && <tr><Td colSpan={7} style={{ textAlign: "center", color: C.textSoft }}>Aucune vente.</Td></tr>}
         </tbody>
       </table>
     </Card>
   );
+
+  const renderArgent = () => {
+    const totalAchatsStock = produits.reduce((s, p) => s + p.stock * p.prixAchat, 0);
+    const totalVentesStock = produits.reduce((s, p) => s + p.stock * p.prixVente, 0);
+    const beneficeStock = totalVentesStock - totalAchatsStock;
+    const beneficeNetApresDepenses = beneficeStock - totalDepenses;
+    return (
+      <div>
+        <div style={{ color: C.textSoft, fontSize: 12, marginBottom: 10 }}>Valeur totale de tous les articles actuellement en stock, selon leurs prix d'achat et de vente unitaires.</div>
+        <Card className="print-area">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, border: `1px solid ${C.ink}` }}>
+            <tbody>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Montant total des achats (tous les articles en stock)</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, border: `1px solid ${C.line}` }}>{fmt(totalAchatsStock, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Montant total des ventes (tous les articles en stock)</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, border: `1px solid ${C.line}` }}>{fmt(totalVentesStock, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Bénéfice (stock)</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: C.brass, border: `1px solid ${C.line}` }}>{fmt(beneficeStock, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.ink, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Total dépenses</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: C.rose, border: `1px solid ${C.line}` }}>{fmt(totalDepenses, config.devise)}</td>
+              </tr>
+              <tr>
+                <td style={{ background: C.inkDeep, color: "#fff", fontWeight: 700, padding: "10px 14px", border: `1px solid ${C.ink}` }}>Bénéfice total (stock, après toutes les dépenses)</td>
+                <td className="f-mono" style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: beneficeNetApresDepenses >= 0 ? C.sage : C.rose, border: `1px solid ${C.line}` }}>{fmt(beneficeNetApresDepenses, config.devise)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+        <Btn kind="ghost" className="no-print" onClick={() => window.print()}><Printer size={13} /> Imprimer</Btn>
+      </div>
+    );
+  };
 
   const renderComptabilite = () => {
     if (!dashboardAuthed) return (
@@ -938,8 +1157,11 @@ export default function App() {
       <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
         <Btn kind={comptaTab === "historique" ? "primary" : "ghost"} onClick={() => setComptaTab("historique")}>Historique</Btn>
         <Btn kind={comptaTab === "bilan" ? "primary" : "ghost"} onClick={() => setComptaTab("bilan")}>Bilan</Btn>
+        <Btn kind={comptaTab === "argent" ? "primary" : "ghost"} onClick={() => setComptaTab("argent")}>Argent</Btn>
       </div>
-      {comptaTab === "historique" ? renderHistorique() : renderBilan()}
+      {comptaTab === "historique" && renderHistorique()}
+      {comptaTab === "bilan" && renderBilan()}
+      {comptaTab === "argent" && renderArgent()}
     </div>
     );
   };
