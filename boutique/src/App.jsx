@@ -59,9 +59,11 @@ function Pill_({ text, color, bg }) { return <span style={{ background: bg, colo
 function fmt(n, devise) { return `${Number(n || 0).toLocaleString("fr-FR")} ${devise || ""}`.trim(); }
 
 function envoyerWhatsApp(numero, texte) {
-  const propre = (numero || "").replace(/[^\d+]/g, "");
-  if (!propre) { window.alert("Aucun numéro de téléphone enregistré pour l'envoyer directement — la fenêtre WhatsApp va s'ouvrir, choisissez le contact manuellement."); }
-  const numeroFinal = propre ? (propre.startsWith("+") ? propre.replace("+", "") : (propre.startsWith("224") ? propre : `224${propre.replace(/^0/, "")}`)) : "";
+  const saisie = window.prompt("Numéro WhatsApp du destinataire (avec l'indicatif si besoin) :", numero || "");
+  if (saisie === null) return; // annulé
+  const propre = saisie.replace(/[^\d+]/g, "");
+  if (!propre) { window.alert("Aucun numéro valide saisi — envoi annulé."); return; }
+  const numeroFinal = propre.startsWith("+") ? propre.replace("+", "") : (propre.startsWith("224") ? propre : `224${propre.replace(/^0/, "")}`);
   const url = `https://wa.me/${numeroFinal}?text=${encodeURIComponent(texte)}`;
   window.open(url, "_blank");
 }
@@ -80,7 +82,12 @@ function analyserCommandeVocale(texte, produits, clients) {
   let clientId = null;
   clients.forEach(c => { if (t.includes(c.prenoms.toLowerCase()) || t.includes(c.nom.toLowerCase())) clientId = c.id; });
   const mPaye = t.match(/pay[ée]?\s*(\d+)/);
-  return { items, clientId, montantPaye: mPaye ? parseInt(mPaye[1]) : null };
+  let mode = null;
+  if (t.includes("orange money") || t.includes("orange")) mode = "Orange Money";
+  else if (t.includes("virement")) mode = "Virement";
+  else if (t.includes("mobile money")) mode = "Mobile Money (autre)";
+  else if (t.includes("espèce") || t.includes("espece") || t.includes("cash")) mode = "Espèces";
+  return { items, clientId, montantPaye: mPaye ? parseInt(mPaye[1]) : null, mode };
 }
 
 function exportCSV(filename, headers, rows) {
@@ -227,6 +234,15 @@ export default function App() {
   const retirerDuPanierCommande = (produitId) => setPanierCommande(prev => prev.filter(x => x.produitId !== produitId));
   const totalPanierCommande = panierCommande.reduce((s, x) => { const p = produits.find(pr => pr.id === x.produitId); return s + (p ? p.prixAchat * x.quantite : 0); }, 0);
 
+  const [nouveauProduitCommandeForm, setNouveauProduitCommandeForm] = useState(null);
+  const ajouterNouveauProduitEtCommande = () => {
+    const f = nouveauProduitCommandeForm;
+    if (!f.nom || !f.prixAchat) return;
+    const id = uid("pr");
+    setProduits(prev => [...prev, { id, nom: f.nom, categorie: f.categorie || "", prixAchat: Number(f.prixAchat), prixVente: Number(f.prixVente) || Number(f.prixAchat), stock: 0, seuilAlerte: Number(f.seuilAlerte) || 5, unite: f.unite || "pièce", dateAjout: today }]);
+    setPanierCommande(prev => [...prev, { produitId: id, quantite: Number(f.quantite) || 1 }]);
+    setNouveauProduitCommandeForm(null);
+  };
   const validerCommande = () => {
     if (!panierCommande.length) return;
     const montantPaye = commandeMontantPaye === "" ? totalPanierCommande : Number(commandeMontantPaye);
@@ -430,7 +446,27 @@ export default function App() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16 }}>
         <Card className="no-print">
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Choisir les produits à commander</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Choisir les produits à commander</div>
+            <Btn kind="ghost" onClick={() => setNouveauProduitCommandeForm({ nom: "", categorie: "", prixAchat: "", prixVente: "", unite: "pièce", seuilAlerte: 5, quantite: 1 })}><Plus size={12} /> Nouveau produit</Btn>
+          </div>
+          {nouveauProduitCommandeForm && (
+            <div style={{ background: C.paper, borderRadius: 8, padding: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 6 }}>Ce produit n'existe pas encore dans le stock — il sera créé automatiquement.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
+                <Input placeholder="Nom du produit" value={nouveauProduitCommandeForm.nom} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, nom: e.target.value })} />
+                <Input placeholder="Catégorie" value={nouveauProduitCommandeForm.categorie} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, categorie: e.target.value })} />
+                <Input type="number" placeholder="Prix d'achat unitaire" value={nouveauProduitCommandeForm.prixAchat} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, prixAchat: e.target.value })} />
+                <Input type="number" placeholder="Prix de vente unitaire" value={nouveauProduitCommandeForm.prixVente} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, prixVente: e.target.value })} />
+                <Input placeholder="Unité (pièce, sac...)" value={nouveauProduitCommandeForm.unite} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, unite: e.target.value })} />
+                <Input type="number" placeholder="Quantité à commander" value={nouveauProduitCommandeForm.quantite} onChange={e => setNouveauProduitCommandeForm({ ...nouveauProduitCommandeForm, quantite: e.target.value })} />
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn onClick={ajouterNouveauProduitEtCommande}><Check size={12} /> Créer et ajouter au panier</Btn>
+                <Btn kind="ghost" onClick={() => setNouveauProduitCommandeForm(null)}><X size={12} /></Btn>
+              </div>
+            </div>
+          )}
           <div style={{ maxHeight: 300, overflowY: "auto" }}>
             {produits.map(p => (
               <div key={p.id} onClick={() => ajouterAuPanierCommande(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 6px", borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
@@ -745,10 +781,11 @@ export default function App() {
     reco.onresult = (e) => {
       const texte = e.results[0][0].transcript;
       setTranscriptVocal(texte);
-      const { items, clientId, montantPaye } = analyserCommandeVocale(texte, produits, clients);
+      const { items, clientId, montantPaye, mode } = analyserCommandeVocale(texte, produits, clients);
       items.forEach(it => { for (let i = 0; i < it.quantite; i++) ajouterAuPanier(it.produitId); });
       if (clientId) setVenteClientId(clientId);
       if (montantPaye != null) setVenteMontantPaye(String(montantPaye));
+      if (mode) setVenteMode(mode);
     };
     reco.start();
   };
@@ -783,7 +820,12 @@ export default function App() {
                 <Mic size={13} /> {ecouteVocale ? "Écoute…" : "Voix"}
               </button>
             </div>
-            {transcriptVocal && <div style={{ fontSize: 10.5, color: C.textSoft, background: C.paper, borderRadius: 6, padding: "5px 8px", marginBottom: 8 }}>🎤 « {transcriptVocal} »</div>}
+            {transcriptVocal && (
+              <div style={{ background: C.paper, borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
+                <div style={{ fontSize: 10.5, color: C.textSoft }}>🎤 « {transcriptVocal} »</div>
+                <div style={{ fontSize: 10.5, color: C.brass, fontWeight: 700, marginTop: 2 }}>Vérifiez et ajustez chaque champ si besoin avant de valider la vente.</div>
+              </div>
+            )}
             {panier.map(x => {
               const p = produits.find(pr => pr.id === x.produitId);
               if (!p) return null;
